@@ -27,6 +27,7 @@ class UpstreamCreate(BaseModel):
     api_keys: list[str] | None = None
     format: str = "openai"
     group: str = "free"
+    groups: list[str] | None = None
     probe_enabled: bool = True
     smart_retry: bool = False
     models: list[ModelEntry] | None = None
@@ -39,6 +40,7 @@ class UpstreamUpdate(BaseModel):
     api_keys: list[str] | None = None
     format: str | None = None
     group: str | None = None
+    groups: list[str] | None = None
     probe_enabled: bool | None = None
     smart_retry: bool | None = None
     enabled: bool | None = None

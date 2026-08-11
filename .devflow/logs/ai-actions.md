@@ -5,6 +5,20 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-08-11 - CH-016 上游源多分组：实施+验证+部署+归档
+- 实施：增量 SQL 05（groups 列+存量回填）；repo/config 解析；5 处权限判断改集合交集（isdisjoint）；schema/前端多选
+- 验证：本地 4 用例全过（双分组命中/可见性/收紧 403/存量无回归）；生产临时给 opencode go 加 free 组实测 free Key 直调 mimo-v2.5 → 200，还原后 403
+- 插曲：Upstreams.vue 部分编辑疑似被外部编辑器缓冲区覆盖回退（tsc 抓出补改）；验证脚本 URL 空格未编码（工具问题）
+- CH-017 修订版方案 + 仪表盘设计稿（docs/designs/CH-017-仪表盘设计稿.html）待用户确认
+
+### 2026-08-11 - 推送后隐私复查 → 发现泄露 → 重写历史修复
+- 用户确认"没有隐私数据上传吧"→ 全库扫描发现 **sql/02_init_data.sql 含真实上游 Key（newapi sk-vJgy… / xiaomi tp-cujb…）+ 三个生产路由层 Key**，首轮脱敏只覆盖了 test/ 脚本，漏了种子 SQL 和文档示例
+- 修复：种子 SQL 全部改占位符（sk-CHANGE-ME-*）；API契约/数据库设计示例 Key 改 sk-your-key；verify_edit_flows.py 改环境变量
+- 历史处理：git commit --amend 重写首提交 + force push（fd0722f → ddf33c8），HEAD 复扫 8 类敏感串全部干净，远端已校验
+- 教训（经验沉淀）：脱敏范围必须覆盖 sql/种子文件/文档示例，不只脚本；今后推送前固定跑敏感串扫描清单
+- 残留说明：seed 中默认管理密码 smart-router-2026 为公开默认值（生产已改密），属可接受
+- 已建议用户：公开窗口约 5 分钟，如需绝对安全可在 opencode/小米/管理后台轮换相关 Key，或将仓库设为私有
+
 ### 2026-08-11 - 纳入 git 管控（gitee）
 - 用户建仓库 https://gitee.com/wang-jianzhou-66/smart_router，要求推送管理
 - 安全前置：test/ 24 个脚本硬编码服务器 root 密码 + 生产 Key → 一次性脱敏脚本批量改环境变量（SR_SSH_PASS/SR_FREE_KEY/SR_PREMIUM_KEY/SR_COZE_KEY），脱敏脚本自身含模式串已删除；config.yaml（v4 真实 Key）、smart_router.db、test_router.py（v4 真实 Key）入 .gitignore

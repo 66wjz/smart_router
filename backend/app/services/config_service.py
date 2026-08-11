@@ -32,6 +32,7 @@ class ConfigService:
                 "keys": self.config.get_upstream_all_keys(uid),
                 "format": u.get("format", "openai"),
                 "group": u.get("group_name", "free"),
+                "groups": u.get("groups") or [u.get("group_name", "free")],
                 "probe_enabled": bool(u.get("probe_enabled", True)),
                 "smart_retry": bool(u.get("smart_retry", False)),
                 "enabled": bool(u.get("enabled", True)),

@@ -194,8 +194,7 @@ def get_ordered_candidates(
         filtered = []
         for c in candidates:
             uid = c.get("upstream", app_config.default_upstream)
-            upstream_group = app_config.get_upstream_group(uid)
-            if upstream_group in allowed_groups:
+            if not app_config.get_upstream_groups(uid).isdisjoint(allowed_groups):
                 filtered.append(c)
         candidates = filtered
 

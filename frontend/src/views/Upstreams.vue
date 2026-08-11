@@ -13,7 +13,7 @@
             <span class="upstream-name">{{ u.name }}</span>
             <BaseBadge variant="gray">{{ u.format }}</BaseBadge>
             <BaseBadge v-if="u.smart_retry" variant="blue">智能重试</BaseBadge>
-            <BaseBadge v-if="u.group" variant="green">{{ u.group }}</BaseBadge>
+            <BaseBadge v-for="g in (u.groups && u.groups.length ? u.groups : [u.group])" :key="g" variant="green">{{ g }}</BaseBadge>
             <BaseBadge :variant="u.enabled ? 'green' : 'gray'">{{ u.enabled ? '已启用' : '已禁用' }}</BaseBadge>
           </div>
           <div class="upstream-actions">
@@ -177,7 +177,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="分组">
-              <el-select v-model="addForm.group" style="width: 100%">
+              <el-select v-model="addForm.groups" multiple placeholder="可多选，任意一个分组的 Key 都可访问本源" style="width: 100%">
                 <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
               </el-select>
             </el-form-item>
@@ -236,7 +236,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="分组">
-              <el-select v-model="editForm.group" style="width: 100%">
+              <el-select v-model="editForm.groups" multiple placeholder="可多选，任意一个分组的 Key 都可访问本源" style="width: 100%">
                 <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
               </el-select>
             </el-form-item>
@@ -322,10 +322,10 @@ const addVisible = ref(false)
 const editVisible = ref(false)
 
 const addForm = reactive({
-  id: '', name: '', base_url: '', api_keys_text: '', format: 'openai', group: 'free', probe_enabled: true, smart_retry: false,
+  id: '', name: '', base_url: '', api_keys_text: '', format: 'openai', groups: ['free'] as string[], probe_enabled: true, smart_retry: false,
 })
 const editForm = reactive({
-  id: '', name: '', base_url: '', keys_text: '', format: 'openai', group: 'free', probe_enabled: true, smart_retry: false,
+  id: '', name: '', base_url: '', keys_text: '', format: 'openai', groups: ['free'] as string[], probe_enabled: true, smart_retry: false,
 })
 
 function parseKeys(text: string): string[] {
@@ -368,7 +368,7 @@ function openAdd() {
   addForm.base_url = ''
   addForm.api_keys_text = ''
   addForm.format = 'openai'
-  addForm.group = 'free'
+  addForm.groups = ['free']
   addForm.probe_enabled = true
   addForm.smart_retry = false
   addVisible.value = true
@@ -380,7 +380,7 @@ function openEdit(u: any) {
   editForm.base_url = u.base_url
   editForm.keys_text = (u.keys || []).join('\n')
   editForm.format = u.format
-  editForm.group = u.group
+  editForm.groups = (u.groups && u.groups.length ? [...u.groups] : [u.group || 'free'])
   editForm.probe_enabled = !!u.probe_enabled
   editForm.smart_retry = !!u.smart_retry
   editVisible.value = true
@@ -727,7 +727,7 @@ async function handleAdd() {
       base_url: addForm.base_url,
       api_keys: keys,
       format: addForm.format,
-      group: addForm.group,
+      groups: addForm.groups.length ? addForm.groups : ['free'],
       probe_enabled: addForm.probe_enabled,
       smart_retry: addForm.smart_retry,
     })
@@ -751,7 +751,7 @@ async function handleEditSave() {
       name: editForm.name,
       base_url: editForm.base_url,
       format: editForm.format,
-      group: editForm.group,
+      groups: editForm.groups.length ? editForm.groups : ['free'],
       probe_enabled: editForm.probe_enabled,
       smart_retry: editForm.smart_retry,
     }

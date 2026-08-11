@@ -21,7 +21,7 @@ async def list_models(request: Request):
         uid = u.get("upstream_id", "")
         if not cfg.is_upstream_enabled(uid):
             continue
-        if key_groups is not None and cfg.get_upstream_group(uid) not in key_groups:
+        if key_groups is not None and cfg.get_upstream_groups(uid).isdisjoint(key_groups):
             continue
         for m in u.get("models") or []:
             name = m.get("name") if isinstance(m, dict) else str(m)

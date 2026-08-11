@@ -193,6 +193,16 @@ class AppConfig:
         upstream = self.get_upstream(upstream_id)
         return upstream.get("group_name", "free") if upstream else "free"
 
+    def get_upstream_groups(self, upstream_id: str) -> set[str]:
+        """上游源归属分组集合（CH-016 多分组；repo 层已回填 groups，空则回退 [group_name]）"""
+        upstream = self.get_upstream(upstream_id)
+        if not upstream:
+            return {"free"}
+        groups = upstream.get("groups")
+        if isinstance(groups, list) and groups:
+            return {str(g) for g in groups}
+        return {upstream.get("group_name", "free")}
+
     def get_model_protocol(self, upstream_id: str, model: str) -> str:
         """模型级协议覆盖：命中 models 条目且带 protocol 则返回，否则回退源级 format"""
         upstream = self.get_upstream(upstream_id)

@@ -81,11 +81,11 @@ class RouterService:
                 status_code=503,
                 detail=f"上游源 {upstream_id} 已禁用（模型 {model}）",
             )
-        upstream_group = self.config.get_upstream_group(upstream_id)
-        if key_groups is not None and upstream_group not in key_groups:
+        upstream_groups = self.config.get_upstream_groups(upstream_id)
+        if key_groups is not None and upstream_groups.isdisjoint(key_groups):
             raise HTTPException(
                 status_code=403,
-                detail=f"API Key 无权访问分组 '{upstream_group}'（模型 {model}）",
+                detail=f"API Key 无权访问分组 {sorted(upstream_groups)}（模型 {model}）",
             )
 
     # ------------------------------------------------------------
