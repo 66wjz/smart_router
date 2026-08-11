@@ -1,0 +1,58 @@
+[
+  {
+    "upstream": "newapi",
+    "model": "minimaxai/minimax-m3",
+    "text": true,
+    "image": true,
+    "tools": true
+  },
+  {
+    "upstream": "newapi",
+    "model": "nvidia/nemotron-3-nano-30b-a3b",
+    "text": true,
+    "image": false,
+    "tools": true
+  },
+  {
+    "upstream": "newapi",
+    "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "text": true,
+    "image": true,
+    "tools": true
+  },
+  {
+    "upstream": "newapi",
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "text": true,
+    "image": false,
+    "tools": true
+  },
+  {
+    "upstream": "newapi",
+    "model": "nvidia/nemotron-3-ultra-550b-a55b",
+    "text": true,
+    "image": false,
+    "tools": true
+  },
+  {
+    "upstream": "newapi",
+    "model": "openai/gpt-oss-20b",
+    "text": true,
+    "image": true,
+    "tools": true
+  },
+  {
+    "upstream": "xiaomi",
+    "model": "mimo-v2.5",
+    "text": true,
+    "image": true,
+    "tools": true
+  },
+  {
+    "upstream": "xiaomi",
+    "model": "mimo-v2.5-pro",
+    "text": true,
+    "image": false,
+    "tools": true
+  }
+]

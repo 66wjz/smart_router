@@ -1,0 +1,85 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { getToken } from '@/utils/auth'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/login',
+      name: 'Login',
+      component: () => import('@/views/Login.vue'),
+      meta: { public: true, title: '登录' },
+    },
+    {
+      path: '/',
+      component: () => import('@/layouts/AdminLayout.vue'),
+      redirect: '/dashboard',
+      children: [
+        {
+          path: 'dashboard',
+          name: 'Dashboard',
+          component: () => import('@/views/Dashboard.vue'),
+          meta: { title: '仪表盘', icon: 'Odometer' },
+        },
+        {
+          path: 'api-keys',
+          name: 'ApiKeys',
+          component: () => import('@/views/ApiKeys.vue'),
+          meta: { title: 'API Key 管理', icon: 'Key' },
+        },
+        {
+          path: 'upstreams',
+          name: 'Upstreams',
+          component: () => import('@/views/Upstreams.vue'),
+          meta: { title: '上游源管理', icon: 'Connection' },
+        },
+        {
+          path: 'rules',
+          name: 'Rules',
+          component: () => import('@/views/Rules.vue'),
+          meta: { title: '路由规则', icon: 'SetUp' },
+        },
+        {
+          path: 'pointers',
+          name: 'Pointers',
+          component: () => import('@/views/Pointers.vue'),
+          meta: { title: '模型别名', icon: 'Link' },
+        },
+        {
+          path: 'latency',
+          name: 'Latency',
+          component: () => import('@/views/Latency.vue'),
+          meta: { title: '延迟面板', icon: 'TrendCharts' },
+        },
+        {
+          path: 'aggregated',
+          name: 'Aggregated',
+          component: () => import('@/views/Aggregated.vue'),
+          meta: { title: '聚合模型名', icon: 'Collection' },
+        },
+        {
+          path: 'settings',
+          name: 'Settings',
+          component: () => import('@/views/Settings.vue'),
+          meta: { title: '系统设置', icon: 'Setting' },
+        },
+      ],
+    },
+  ],
+})
+
+// 全局前置守卫
+router.beforeEach((to, _from, next) => {
+  document.title = to.meta.title ? `${to.meta.title} - Smart Router` : 'Smart Router'
+  if (to.meta.public) {
+    next()
+    return
+  }
+  if (!getToken()) {
+    next({ path: '/login', query: { redirect: to.fullPath } })
+    return
+  }
+  next()
+})
+
+export default router

@@ -1,0 +1,22 @@
+# 敏感与运行时产物（绝不入库）
+config.yaml
+backend/smart_router.db
+backend/smart_router.db-journal
+backend/smart_router.db-wal
+backend/smart_router.db-shm
+test/_sanitize_secrets.py
+
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+.venv/
+
+# 前端
+node_modules/
+frontend/dist/
+
+# 环境与工具
+.env
+.claude/
+test_router.py
