@@ -91,30 +91,42 @@ const userStore = useUserStore()
 
 const sidebarGroups = [
   {
-    label: '管理',
+    label: '',
     items: [
       { key: 'dashboard', label: '仪表盘', icon: 'gauge', path: '/dashboard' },
       { key: 'api-keys', label: 'API Key 管理', icon: 'key', path: '/api-keys' },
       { key: 'upstreams', label: '上游源管理', icon: 'server', path: '/upstreams' },
-      { key: 'rules', label: '路由规则', icon: 'sliders-horizontal', path: '/rules' },
       { key: 'pointers', label: '模型别名', icon: 'link', path: '/pointers' },
-      { key: 'latency', label: '延迟面板', icon: 'activity', path: '/latency' },
+    ],
+  },
+  {
+    label: '智能路由',
+    items: [
+      { key: 'rules', label: '路由规则', icon: 'sliders-horizontal', path: '/rules' },
       { key: 'aggregated', label: '聚合模型名', icon: 'collection', path: '/aggregated' },
+      { key: 'latency', label: '延迟面板', icon: 'activity', path: '/latency' },
+    ],
+  },
+  {
+    label: '',
+    items: [
       { key: 'settings', label: '系统设置', icon: 'settings', path: '/settings' },
     ],
   },
 ]
 
+const allMenuItems = sidebarGroups.flatMap((g) => g.items)
+
 const activeMenuKey = computed(() => {
   const path = route.path
-  for (const item of sidebarGroups[0].items) {
+  for (const item of allMenuItems) {
     if (path === item.path || path.startsWith(item.path + '/')) return item.key
   }
   return ''
 })
 
 function handleMenuSelect(key: string) {
-  const item = sidebarGroups[0].items.find((i) => i.key === key)
+  const item = allMenuItems.find((i) => i.key === key)
   if (item) router.push(item.path)
 }
 

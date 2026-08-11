@@ -1,5 +1,7 @@
 <template>
   <div>
+    <el-alert type="info" :closable="false" style="margin-bottom: 16px"
+      title="延迟探测仅覆盖路由规则中的候选模型；上游源里已配置但未进规则的模型不参与探测，可在上游源管理用「测试」手动验证。" />
     <!-- 汇总卡片 -->
     <el-row :gutter="16" style="margin-bottom: 16px">
       <el-col :span="8">
