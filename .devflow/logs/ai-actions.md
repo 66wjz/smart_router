@@ -5,6 +5,12 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-08-11 - v5.1.0 版本收口：文档对齐 + 版本号 + tag
+- 文档缺口盘点（marker 扫描）：数据库设计补 up_upstream.groups 列 + format 三协议 + 3.8 交集语义；API契约/接口文档补 upstream.groups 字段与 responses 协议；系统核心流程表速览补 groups；功能清单补 1.3.2 智能重试/1.5.2 多分组/2.2.1 仪表盘双视角；README 修订（版本头/双定位/多分组/三协议接入示例/FRONTEND_DIST 本地托管说明/八表/智能路由折叠菜单；修正"当前唯一入站协议"过期表述）
+- 版本号：FastAPI version=5.1.0、启动日志、Login/顶栏 v5.1
+- 部署：deploy_v510_release.py（main.py+run.py+dist）；生产 openapi.json 验证 version=5.1.0
+- git tag v5.1.0 随提交推送
+
 ### 2026-08-11 - FB-019 智能路由改可折叠一级菜单（CH-017 交互迭代）
 - 用户反馈：分组标题不符合预期，要"一级菜单点击展开二级"
 - 实施：BaseSidebar 新增 collapsible 分组（network 图标 + chevron 旋转 + 二级项缩进，默认展开）；AdminLayout 智能路由组启用

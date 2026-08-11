@@ -189,7 +189,9 @@ Header: `Authorization: Bearer <token>`
 - **出参**:
 
 ```json
-{ "upstreams": [ { "id": "newapi", "name": "NewAPI 中转站", "base_url": "http://...", "api_key": "sk-XW***gow", "key_count": 3, "keys": ["sk-xxx", "sk-yyy"], "format": "openai", "group": "free", "probe_enabled": true } ] }
+{ "upstreams": [ { "id": "newapi", "name": "NewAPI 中转站", "base_url": "http://...", "api_key": "sk-XW***gow", "key_count": 3, "keys": ["sk-xxx", "sk-yyy"], "format": "openai", "group": "free", "groups": ["free"], "probe_enabled": true } ] }
+
+> `groups` 为归属分组数组（CH-016 多分组）；`group` 为其首元素冗余（向后兼容）。权限判定：Key 分组集合与源 groups 集合有交集即放行。
 ```
 
 > api_key 字段脱敏显示；key_count 为 Key 池数量；keys 为完整 Key 数组（管理端编辑回显用）
@@ -207,8 +209,9 @@ Header: `Authorization: Bearer <token>`
 | base_url | string | 是 | 地址 |
 | api_key | string | 否 | 单 Key 快捷写法（api_keys 为空时兜底） |
 | api_keys | array\<string\> | 否 | Key 池（批量 Key，优先于 api_key） |
-| format | string | 否 | openai/anthropic，默认 openai |
-| group | string | 否 | 分组，默认 free |
+| format | string | 否 | openai/anthropic/responses，默认 openai（源级；模型级 protocol 可覆盖） |
+| group | string | 否 | 单分组（旧字段，与 groups 二选一） |
+| groups | array | 否 | 归属分组数组（CH-016 多分组），默认 ["free"] |
 
 > api_key / api_keys 至少提供一个
 
@@ -438,7 +441,7 @@ Header: `Authorization: Bearer <token>`
 | 系统概览 | GET /admin/api/dashboard | 多表聚合 |
 | 密钥增删改查 | /admin/api/api-keys | api_api_key |
 | 分组列表管理 | GET/PUT /admin/api/groups | sys_setting(groups) |
-| 模型列表按 Key 过滤 | GET /v1/models | up_upstream(group_name), api_api_key(groups) |
+| 模型列表按 Key 过滤 | GET /v1/models | up_upstream(groups), api_api_key(groups) |
 | 上游源增删查 | /admin/api/upstreams | up_upstream |
 | 拉取模型列表 | 前端直连上游 | up_upstream |
 | 规则可视化编辑 | GET/PUT /admin/api/rules | rule_rule, rule_candidate |

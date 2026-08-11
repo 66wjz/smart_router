@@ -44,7 +44,7 @@ HTTP_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), veri
 # ============================================================
 # FastAPI 应用
 # ============================================================
-app = FastAPI(title="Smart Router", version="5.0")
+app = FastAPI(title="Smart Router", version="5.1.0")
 
 # 挂载路由
 app.include_router(v1_router)
@@ -107,7 +107,7 @@ async def require_api_key(request: Request, call_next):
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(probe.run_loop(HTTP_CLIENT))
-    log.info(f"Smart Router v5 启动，监听端口 {config.listen_port}")
+    log.info(f"Smart Router v5.1.0 启动，监听端口 {config.listen_port}")
 
 
 @app.on_event("shutdown")

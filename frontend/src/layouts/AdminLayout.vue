@@ -7,7 +7,7 @@
           <BaseIcon name="cpu" :size="16" color="#fff" />
         </div>
         <span>Smart Router</span>
-        <span class="brand-sub">v5 · 管理后台</span>
+        <span class="brand-sub">v5.1 · 管理后台</span>
       </div>
       <div class="top-nav-right">
         <BaseButton variant="ghost" size="sm" :disabled="reloading" @click="handleReload">

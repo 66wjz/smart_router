@@ -1,5 +1,7 @@
 # 项目流程状态
 
+> **当前版本：v5.1.0**（2026-08-11 发布，git tag v5.1.0；仓库 https://gitee.com/wang-jianzhou-66/smart_router）
+
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
 - 流程路径：full-route（正式开发，2026-08-09 启动 v5 重构管控）+ 维护迭代（CH-001~007 已实现部署）

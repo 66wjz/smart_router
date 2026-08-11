@@ -8,7 +8,7 @@
         <span>Smart Router</span>
       </div>
       <h2>欢迎使用</h2>
-      <p class="subtitle">AI 模型智能路由代理 · v5</p>
+      <p class="subtitle">AI 模型智能路由代理 · v5.1</p>
 
       <BaseFormGroup label="用户名" :error="formErrors.username">
         <BaseInput v-model="form.username" placeholder="请输入用户名" @keyup.enter="handleLogin" />

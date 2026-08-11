@@ -1,5 +1,5 @@
 """
-Smart Router v5 启动入口
+Smart Router v5.1.0 启动入口
 用法：uv run run.py  或  uv run uvicorn app.main:app --port 10002
 """
 

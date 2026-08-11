@@ -1,6 +1,8 @@
-# Smart Router v5 - AI 模型智能路由代理
+# Smart Router v5.1 - AI 模型智能路由代理 · 中转站
 
-基于 FastAPI + Vue3 + SQLite 的轻量级 AI 模型智能路由代理。部署在中转站前方，根据请求内容自动选择最佳模型，提供延迟探测、故障转移、Key 池、分组权限、智能重试、多协议适配等企业级能力。
+**当前版本：v5.1.0**（2026-08-11 发布）· 仓库：https://gitee.com/wang-jianzhou-66/smart_router
+
+基于 FastAPI + Vue3 + SQLite 的轻量级 AI 模型网关：既是**智能路由器**（按请求内容自动选模型），也是**中转站**（统一 Key/分组/协议，直连透传已配置模型）。提供 3×3 协议矩阵、延迟探测、故障转移、Key 池、多分组权限、智能重试等企业级能力。
 
 ## 架构概览
 
@@ -40,7 +42,7 @@
 | **多协议出站** | 上游模型级协议覆盖：openai / anthropic / responses，同站多协议源（如 opencode）一个源搞定 |
 | **智能重试** | 源级开关（默认关）：5xx/超时/连接中断自动换 Key 或退避重试（指数退避 + jitter），客户端无感知 |
 | **上游 Key 池** | 每个上游可配多个 Key 轮询分摊流量；单 Key 失败/限流自动换 Key + 冷却恢复 |
-| **分组权限** | 可配置分组（free/premium/自定义），API Key 与上游源按分组隔离，/v1/models 按 Key 过滤 |
+| **分组权限** | 可配置分组（free/premium/自定义）；API Key 与上游源均支持**多分组**，交集即放行；/v1/models 只返回 Key 有权访问的已配置模型 |
 | **请求级容错** | 候选转移 + Key 轮换 + 同渠道退避重试三层；流式首字节分界线（吐字前可重试，吐字后不重复） |
 | **延迟探测** | 定期探测候选模型延迟，慢模型自动降权/剔除，付费源可关探测 |
 | **上下文感知** | 估算请求 token，排除上下文不够的模型，max_tokens 自动调低 |
@@ -58,8 +60,9 @@
 ### 本地运行
 
 ```bash
-# 后端（含前端静态托管，frontend/dist 存在时自动挂载）
+# 后端（本地托管前端需指定 FRONTEND_DIST 指向构建产物）
 cd backend
+$env:FRONTEND_DIST = "../frontend/dist"   # Windows PowerShell；Linux 用 export
 uv run python run.py          # 监听 :10002
 
 # 前端开发（可选，改前端时）
@@ -85,21 +88,33 @@ systemd 服务：smart-router（:10002，Restart=always）
 
 浏览器访问 `http://your-server:10002`，登录后：
 
-1. **仪表盘** — 上游源数、模型可用率、Key 数、故障状态
-2. **上游源** — 添加/编辑/禁用源；Base URL 实时拼接预览；多 Key 池；智能重试开关；模型列表（拉取/手动添加/单测/全测/批量），**每个模型可单独覆盖协议**
-3. **路由规则** — 可视化编辑候选模型（权重/优先级/上下文上限）
-4. **模型别名** — 别名指针管理
-5. **API Key** — 增删改、随机生成、分组指派、「接入说明」弹窗
+1. **仪表盘** — 双视角：中转（上游源状态一览/Key 覆盖分组）+ 路由（候选可用率/规则健康/聚合入口）
+2. **上游源** — 添加/编辑/禁用源；**多分组归属**；Base URL 实时拼接预览；多 Key 池；智能重试开关；模型列表（拉取/手动添加/单测/全测/批量），**每个模型可单独覆盖协议**
+3. **模型别名** — 别名指针管理
+4. **API Key** — 增删改、随机生成、多分组指派、「接入说明」弹窗
+5. **智能路由**（折叠菜单）— 路由规则（权重/优先级/上下文上限）/ 聚合模型名 / 延迟面板
 6. **设置** — 探测/重试/故障转移/智能重试全局参数、分组管理、密码修改、热重载
 
 ### 客户端接入
 
 ```bash
-# OpenAI 兼容格式（当前唯一入站协议）
+# OpenAI 格式
 curl http://your-server:10002/v1/chat/completions \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"smart-latest","messages":[{"role":"user","content":"你好"}]}'
+
+# Anthropic 格式（Claude Code 等，x-api-key 或 Bearer 均可）
+curl http://your-server:10002/v1/messages \
+  -H "x-api-key: YOUR_KEY" -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"smart-latest","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
+
+# Responses 格式（Codex CLI 等）
+curl http://your-server:10002/v1/responses \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"smart-latest","input":"你好"}'
 ```
 
 ```python
@@ -141,7 +156,7 @@ backend/app/
 ├── api/                  # admin/*（管理接口）+ v1/*（客户端接口）
 ├── core/                 # config（SQLite+缓存）/ router_engine / probe / health / key_pool
 ├── services/             # router_service（调度核心）/ config_service / ...
-├── repositories/         # 七表 Repository（upstream/key/rule/pointer/...）
+├── repositories/         # 八表 Repository（upstream/key/rule/pointer/group/...）
 └── upstream/             # openai / anthropic / responses 三个出站适配器
 frontend/src/views/       # Dashboard / Upstreams / Rules / Pointers / ApiKeys / Settings ...
 ```
