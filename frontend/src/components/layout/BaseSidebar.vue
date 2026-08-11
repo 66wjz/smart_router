@@ -9,19 +9,38 @@
 
     <!-- Navigation -->
     <nav class="sidebar-nav">
-      <div v-for="group in visibleGroups" :key="group.label" class="nav-group">
-        <div v-if="group.label && showLabels" class="nav-group-label">{{ group.label }}</div>
+      <div v-for="group in visibleGroups" :key="group.label || '_root'" class="nav-group">
+        <!-- 可折叠分组：一级菜单项，点击展开/收起二级 -->
         <div
-          v-for="item in group.items"
-          :key="item.key"
-          class="nav-item"
-          :class="{ active: activeKey === item.key }"
-          :title="isCollapsed ? item.label : ''"
-          @click="$emit('select', item.key)"
+          v-if="group.collapsible"
+          class="nav-item nav-group-toggle"
+          :title="isCollapsed ? group.label : ''"
+          @click="toggleGroup(group.label)"
         >
-          <BaseIcon v-if="item.icon" :name="item.icon" :size="16" />
-          <span v-if="showLabels" class="nav-item-label">{{ item.label }}</span>
+          <BaseIcon v-if="group.icon" :name="group.icon" :size="16" />
+          <span v-if="showLabels" class="nav-item-label">{{ group.label }}</span>
+          <BaseIcon
+            v-if="showLabels"
+            name="chevron-down"
+            :size="12"
+            class="group-chevron"
+            :style="{ transform: isGroupOpen(group.label) ? 'none' : 'rotate(-90deg)', transition: 'transform 0.15s' }"
+          />
         </div>
+        <div v-else-if="group.label && showLabels" class="nav-group-label">{{ group.label }}</div>
+        <template v-if="!group.collapsible || isGroupOpen(group.label)">
+          <div
+            v-for="item in group.items"
+            :key="item.key"
+            class="nav-item"
+            :class="{ active: activeKey === item.key, 'nav-sub-item': group.collapsible && !isCollapsed }"
+            :title="isCollapsed ? item.label : ''"
+            @click="$emit('select', item.key)"
+          >
+            <BaseIcon v-if="item.icon" :name="item.icon" :size="16" />
+            <span v-if="showLabels" class="nav-item-label">{{ item.label }}</span>
+          </div>
+        </template>
       </div>
     </nav>
 
@@ -49,6 +68,9 @@ export interface NavItem {
 
 export interface NavGroup {
   label?: string
+  icon?: string
+  /** 可折叠分组：label 渲染为可点击的一级菜单，点击展开/收起二级项 */
+  collapsible?: boolean
   items: NavItem[]
 }
 
@@ -94,6 +116,21 @@ const visibleGroups = computed(() => {
     }))
     .filter(group => group.items.length > 0)
 })
+
+// 可折叠分组的展开状态（默认展开）
+const closedGroups = ref<Set<string>>(new Set())
+
+function isGroupOpen(label?: string): boolean {
+  return !closedGroups.value.has(label || '')
+}
+
+function toggleGroup(label?: string) {
+  const key = label || ''
+  const next = new Set(closedGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  closedGroups.value = next
+}
 </script>
 
 <style scoped>
@@ -234,6 +271,19 @@ const visibleGroups = computed(() => {
 .nav-item-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.nav-group-toggle .nav-item-label {
+  flex: 1;
+}
+
+.group-chevron {
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+
+.nav-sub-item {
+  padding-left: 28px;
 }
 
 .collapsed .nav-item {

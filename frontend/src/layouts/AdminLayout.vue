@@ -101,6 +101,8 @@ const sidebarGroups = [
   },
   {
     label: '智能路由',
+    icon: 'network',
+    collapsible: true,
     items: [
       { key: 'rules', label: '路由规则', icon: 'sliders-horizontal', path: '/rules' },
       { key: 'aggregated', label: '聚合模型名', icon: 'collection', path: '/aggregated' },
