@@ -6,7 +6,7 @@ Responses 格式请求（Codex 等客户端）→ 内部统一 openai chat 格�
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.services.router_service import RouterService
@@ -19,6 +19,20 @@ from app.upstream.responses_adapter import (
 log = logging.getLogger("router")
 
 router = APIRouter(tags=["v1-responses"])
+
+
+def _responses_error(status_code: int, message: str) -> JSONResponse:
+    """构造 Responses 协议错误响应（Codex 等客户端依赖该格式解析错误）"""
+    etype = {
+        400: "invalid_request_error",
+        401: "authentication_error",
+        403: "permission_error",
+        429: "rate_limit_error",
+        503: "api_error",
+    }.get(status_code, "api_error")
+    return JSONResponse(status_code=status_code, content={
+        "error": {"message": message, "type": etype, "code": etype},
+    })
 
 
 @router.post("/v1/responses")
@@ -41,7 +55,10 @@ async def responses(request: Request):
     svc: RouterService = request.app.state.router_service
     log.info(f"[/v1/responses] {model} stream={bool(body.get('stream'))} key={getattr(request.state, 'key_name', '')}")
 
-    resp = await svc.chat_completions(openai_body, key_groups)
+    try:
+        resp = await svc.chat_completions(openai_body, key_groups)
+    except HTTPException as e:
+        return _responses_error(e.status_code, str(e.detail) if e.detail else "上游服务不可用")
 
     if isinstance(resp, StreamingResponse):
         converter = OpenaiToResponsesSSE(model)

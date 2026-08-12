@@ -70,6 +70,16 @@ Header: `Authorization: Bearer <token>`
 }
 ```
 
+各协议入站的错误均按对应协议标准格式返回（CH-018）：
+
+| 入站 | 错误格式 |
+|------|---------|
+| OpenAI（/v1/chat/completions） | `{"error": {"message", "type", "code"}}` |
+| Anthropic（/v1/messages） | `{"type": "error", "error": {"type", "message"}}` |
+| Responses（/v1/responses） | `{"error": {"message", "type", "code"}}` |
+
+> 无可用模型返回 503 + 上述各协议格式错误；客户端 SDK 可直接解析，不再出现"超时无反馈"。
+
 ---
 
 ## 二、客户端接口（/v1/）
@@ -90,11 +100,24 @@ Header: `Authorization: Bearer <token>`
 ### 2.2 Anthropic Messages
 
 - **路径**: `POST /v1/messages`
-- **鉴权**: 路由层 API Key
+- **鉴权**: 路由层 API Key（兼容 `x-api-key` 头）
 - **说明**: Anthropic 格式请求，内部转 OpenAI 格式路由，响应转回 Anthropic 格式
+- **入参**: Anthropic messages 格式（model/messages/max_tokens/system/tools/stream 等）；`content` 支持 text/image 块（base64 或 url，CH-018）
 - **出参**: Anthropic messages 格式 或 SSE 流
+- **推理模型**: 上游 `reasoning` 内容映射为 anthropic `thinking` 块（非流式）/ `thinking_delta` 事件（流式），正文为空时仍返回推理内容（CH-018）
+- **错误**: Anthropic 标准错误格式 `{"type":"error","error":{"type","message"}}`（CH-018）
 
-### 2.3 模型列表
+### 2.3 Responses
+
+- **路径**: `POST /v1/responses`
+- **鉴权**: 路由层 API Key（Bearer）
+- **说明**: Responses 格式请求（Codex 等），内部转 OpenAI 格式路由，响应转回 Responses 格式
+- **入参**: Responses 格式（model/input/instructions/max_output_tokens/tools/stream 等）；`input[].content` 支持 input_text/input_image 块（CH-018）
+- **出参**: Responses 格式 或 SSE 流
+- **推理模型**: 上游 `reasoning` 内容映射为 Responses `reasoning` output item（非流式）/ `response.reasoning_summary_text.delta` 事件（流式）（CH-018）
+- **错误**: Responses 标准错误格式 `{"error":{"message","type","code"}}`（CH-018）
+
+### 2.4 模型列表
 
 - **路径**: `GET /v1/models`
 - **鉴权**: 路由层 API Key
@@ -462,3 +485,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-08-10 | CH-008：新增 4.22/4.23 分组管理接口；/v1/models 增加按 Key 分组过滤说明 | AI+用户 |
 | 2026-08-10 | CH-012：上游源新增 smart_retry 开关字段；新增 GET/PUT /admin/api/config/smart-retry 全局参数；成功响应新增 X-Served-By / X-Retry-Count 响应头 | AI+用户 |
 | 2026-08-11 | CH-009/010：新增入站端点 POST /v1/messages（Anthropic 格式，兼容 x-api-key 鉴权）与 POST /v1/responses（Responses 格式，Codex 可用）；内部统一 openai chat 中间格式，双向自动转换（含流式），3×3 协议矩阵收齐 | AI+用户 |
+| 2026-08-12 | CH-018：三入站错误统一为各协议标准格式；messages/responses 入站补图片块映射（image/input_image → image_url）；推理模型 reasoning 映射（anthropic thinking / responses reasoning item）；新增 2.3 Responses 契约章节 | AI+用户 |

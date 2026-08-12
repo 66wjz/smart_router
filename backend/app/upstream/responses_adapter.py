@@ -457,13 +457,22 @@ def convert_request_responses_to_openai(body: dict) -> dict:
             itype = item.get("type", "message")
             if itype == "message":
                 role = item.get("role", "user")
-                text_parts = []
+                parts: list[dict] = []
                 for c in item.get("content") or []:
                     if isinstance(c, dict) and c.get("type") in ("input_text", "output_text", "text"):
-                        text_parts.append(str(c.get("text", "")))
+                        parts.append({"type": "text", "text": str(c.get("text", ""))})
+                    elif isinstance(c, dict) and c.get("type") == "input_image":
+                        img_url = (c.get("image_url") or "").strip()
+                        if img_url:
+                            parts.append({"type": "image_url", "image_url": {"url": img_url}})
                     elif isinstance(c, str):
-                        text_parts.append(c)
-                content = "".join(text_parts) if text_parts else (item.get("content") if isinstance(item.get("content"), str) else "")
+                        parts.append({"type": "text", "text": c})
+                if len(parts) == 1 and parts[0]["type"] == "text":
+                    content = parts[0]["text"]
+                elif parts:
+                    content = parts
+                else:
+                    content = item.get("content") if isinstance(item.get("content"), str) else ""
                 if role == "system":
                     messages.insert(0, {"role": "system", "content": content})
                 else:
@@ -508,6 +517,20 @@ def convert_response_openai_to_responses(openai_resp: dict, model: str) -> dict:
     choice = (openai_resp.get("choices") or [{}])[0]
     message = choice.get("message", {})
     output: list[dict] = []
+    # 推理模型（deepseek 系）reasoning → Responses reasoning item，避免只回推理时正文为空
+    reasoning = message.get("reasoning")
+    if not reasoning and message.get("reasoning_details"):
+        reasoning = "".join(
+            str(d.get("text", "")) for d in message["reasoning_details"]
+            if isinstance(d, dict) and d.get("text")
+        )
+    if reasoning:
+        output.append({
+            "type": "reasoning",
+            "id": f"rs_{int(time.time() * 1000)}",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": reasoning}],
+        })
     if message.get("content"):
         output.append({
             "type": "message",
@@ -548,6 +571,8 @@ class OpenaiToResponsesSSE:
         self.started = False
         self.item_added = False
         self.text_parts: list[str] = []
+        self.reasoning_parts: list[str] = []
+        self.reasoning_item_started = False
         self.closed = False
 
     @staticmethod
@@ -585,20 +610,39 @@ class OpenaiToResponsesSSE:
                 "id": f"resp_{int(time.time() * 1000)}", "object": "response", "status": "in_progress",
                 "model": self.model, "output": []}}))
 
+        # 推理内容（deepseek 系 delta.reasoning_content / 部分上游用 delta.reasoning）→ reasoning item + summary delta
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+        if reasoning:
+            if not self.reasoning_item_started:
+                self.reasoning_item_started = True
+                out.append(self._ev("response.output_item.added", {"type": "response.output_item.added",
+                                    "output_index": 0, "item": {"type": "reasoning", "status": "in_progress",
+                                                                 "summary": []}}))
+            self.reasoning_parts.append(reasoning)
+            out.append(self._ev("response.reasoning_summary_text.delta", {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0, "item_id": f"rs_{int(time.time() * 1000)}",
+                "summary_index": 0, "delta": reasoning}))
+
         if delta.get("content"):
+            if self.reasoning_item_started and not self.item_added:
+                out.append(self._ev("response.output_item.done", {"type": "response.output_item.done",
+                                    "output_index": 0, "item": {"type": "reasoning", "status": "completed",
+                                                                 "summary": [{"type": "summary_text",
+                                                                              "text": "".join(self.reasoning_parts)}]}}))
             if not self.item_added:
                 self.item_added = True
                 out.append(self._ev("response.output_item.added", {"type": "response.output_item.added",
-                                    "output_index": 0, "item": {"type": "message", "role": "assistant", "status": "in_progress"}}))
+                                    "output_index": 1, "item": {"type": "message", "role": "assistant", "status": "in_progress"}}))
             self.text_parts.append(delta["content"])
             out.append(self._ev("response.output_text.delta", {"type": "response.output_text.delta",
-                                "output_index": 0, "content_index": 0, "delta": delta["content"]}))
+                                "output_index": 1, "content_index": 0, "delta": delta["content"]}))
 
         for tc in delta.get("tool_calls") or []:
             fn = tc.get("function", {})
             if fn.get("name"):
                 out.append(self._ev("response.output_item.done", {"type": "response.output_item.done",
-                                    "output_index": 1, "item": {"type": "function_call", "status": "completed",
+                                    "output_index": 2, "item": {"type": "function_call", "status": "completed",
                                                                 "call_id": tc.get("id", ""), "name": fn["name"],
                                                                 "arguments": fn.get("arguments", "")}}))
 
@@ -611,16 +655,25 @@ class OpenaiToResponsesSSE:
         if self.closed:
             return out
         self.closed = True
-        if self.item_added:
+        if self.reasoning_item_started and not self.item_added:
             out.append(self._ev("response.output_item.done", {"type": "response.output_item.done", "output_index": 0,
+                                "item": {"type": "reasoning", "status": "completed",
+                                         "summary": [{"type": "summary_text", "text": "".join(self.reasoning_parts)}]}}))
+        if self.item_added:
+            out.append(self._ev("response.output_item.done", {"type": "response.output_item.done", "output_index": 1,
                                 "item": {"type": "message", "role": "assistant", "status": "completed",
                                          "content": [{"type": "output_text", "text": "".join(self.text_parts)}]}}))
         if self.started:
+            output: list[dict] = []
+            if self.reasoning_parts:
+                output.append({"type": "reasoning", "status": "completed",
+                               "summary": [{"type": "summary_text", "text": "".join(self.reasoning_parts)}]})
+            if self.text_parts:
+                output.append({"type": "message", "role": "assistant", "status": "completed",
+                               "content": [{"type": "output_text", "text": "".join(self.text_parts)}]})
             out.append(self._ev("response.completed", {"type": "response.completed", "response": {
                 "id": f"resp_{int(time.time() * 1000)}", "object": "response", "status": "completed",
-                "model": self.model,
-                "output": [{"type": "message", "role": "assistant", "status": "completed",
-                            "content": [{"type": "output_text", "text": "".join(self.text_parts)}]}] if self.text_parts else []}}))
+                "model": self.model, "output": output}}))
         return out
 
 

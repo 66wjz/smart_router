@@ -144,6 +144,11 @@ print(resp.choices[0].message.content)
 
 内部统一以 OpenAI chat 格式为中间语言：入站归一化 → 路由 → 出站按模型协议转换。任意协议客户端可调用任意协议上游的模型。
 
+三协议入站能力对齐（v5.1.0+）：
+- **错误格式**：各协议错误按各自标准格式返回（OpenAI `{"error":{...}}` / Anthropic `{"type":"error","error":{...}}` / Responses `{"error":{...}}`），客户端 SDK 可直接解析
+- **图片**：messages/responses 入站支持图片块（base64 或 URL），真实透传（不支持图片的模型由上游拒绝报错）
+- **推理模型**：reasoning 内容映射（Anthropic `thinking` 块 / Responses `reasoning` item），正文为空时推理内容不丢失
+
 ## 技术栈与结构
 
 - **后端**：FastAPI + httpx + SQLite（配置库存储 + 内存缓存 + 热重载），uv 管理

@@ -1,12 +1,15 @@
-"""生产验证 CH-016：opencode go 临时加 free 分组 → free Key 直调 mimo-v2.5 应通 → 还原"""
+"""生产验证 CH-016：opencode go 临时加 free 分组 → free Key 直调 mimo-v2.5 应通 → 还原
+凭据走环境变量：SR_ADMIN_PASS（管理员密码）、SR_FREE_KEY（free 分组测试 Key）
+"""
 import json
+import os
 import sys
 import urllib.parse
 import urllib.request
 
 PROD = "http://8.137.195.192:10002"
-ADMIN_PASS = "CHANGE-ME-ADMIN-PASSWORD"
-FREE_KEY = "sk-CHANGE-ME-CLIENT-KEY"
+ADMIN_PASS = os.environ.get("SR_ADMIN_PASS", "")
+FREE_KEY = os.environ.get("SR_FREE_KEY", "")
 
 
 def req(method: str, path: str, body: dict | None = None, token: str = "", key: str = "", timeout: int = 120):

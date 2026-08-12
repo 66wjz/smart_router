@@ -289,11 +289,30 @@ def _make_sse_chunk(model: str, delta: dict, finish_reason: str | None) -> str:
 # 入站逆转换（CH-009）：Anthropic → OpenAI
 # ============================================================
 
-def _anthropic_content_to_openai(content) -> tuple[str, list[dict], list[dict]]:
-    """解析 anthropic message content → (文本, tool_calls, tool_results)"""
+def _anthropic_image_block_to_openai(block: dict) -> dict | None:
+    """anthropic image 块 → openai image_url 块（base64 → data URI / url 直传）"""
+    source = block.get("source") or {}
+    stype = source.get("type", "")
+    if stype == "base64":
+        data = source.get("data", "")
+        if not data:
+            return None
+        media = source.get("media_type", "image/png")
+        return {"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}}
+    if stype == "url":
+        url = source.get("url", "")
+        if not url:
+            return None
+        return {"type": "image_url", "image_url": {"url": url}}
+    return None
+
+
+def _anthropic_content_to_openai(content) -> tuple[str | list, list[dict], list[dict]]:
+    """解析 anthropic message content → (content, tool_calls, tool_results)
+    content 为纯文本字符串（无图片时）或 openai 多模态块列表（含图片时）"""
     if isinstance(content, str):
         return content, [], []
-    text_parts: list[str] = []
+    openai_parts: list[dict] = []
     tool_calls: list[dict] = []
     tool_results: list[dict] = []
     for block in content or []:
@@ -301,7 +320,11 @@ def _anthropic_content_to_openai(content) -> tuple[str, list[dict], list[dict]]:
             continue
         btype = block.get("type", "")
         if btype == "text":
-            text_parts.append(str(block.get("text", "")))
+            openai_parts.append({"type": "text", "text": str(block.get("text", ""))})
+        elif btype == "image":
+            img = _anthropic_image_block_to_openai(block)
+            if img:
+                openai_parts.append(img)
         elif btype == "tool_use":
             tool_calls.append({
                 "id": block.get("id", f"call_{uuid.uuid4().hex[:24]}"),
@@ -313,7 +336,11 @@ def _anthropic_content_to_openai(content) -> tuple[str, list[dict], list[dict]]:
             if isinstance(inner, list):
                 inner = "".join(str(b.get("text", "")) for b in inner if isinstance(b, dict) and b.get("type") == "text")
             tool_results.append({"tool_call_id": block.get("tool_use_id", ""), "content": str(inner)})
-    return "".join(text_parts), tool_calls, tool_results
+    if not openai_parts:
+        return "", tool_calls, tool_results
+    if len(openai_parts) == 1 and openai_parts[0]["type"] == "text":
+        return openai_parts[0]["text"], tool_calls, tool_results
+    return openai_parts, tool_calls, tool_results
 
 
 def convert_request_anthropic_to_openai(body: dict) -> dict:
@@ -328,14 +355,14 @@ def convert_request_anthropic_to_openai(body: dict) -> dict:
 
     for msg in body.get("messages", []):
         role = msg.get("role", "user")
-        text, tool_calls, tool_results = _anthropic_content_to_openai(msg.get("content"))
+        content, tool_calls, tool_results = _anthropic_content_to_openai(msg.get("content"))
         if tool_results:
             for tr in tool_results:
                 messages.append({"role": "tool", "tool_call_id": tr["tool_call_id"], "content": tr["content"]})
-        entry: dict = {"role": role, "content": text}
+        entry: dict = {"role": role, "content": content}
         if tool_calls:
             entry["tool_calls"] = tool_calls
-        if text or tool_calls:
+        if content or tool_calls:
             messages.append(entry)
 
     result: dict[str, Any] = {
@@ -369,6 +396,15 @@ def convert_response_openai_to_anthropic(openai_resp: dict, model: str) -> dict:
     choice = (openai_resp.get("choices") or [{}])[0]
     message = choice.get("message", {})
     content: list[dict] = []
+    # 推理模型（deepseek 系）的 reasoning 内容 → anthropic thinking 块，避免只回 reasoning 时正文为空
+    reasoning = message.get("reasoning")
+    if not reasoning and message.get("reasoning_details"):
+        reasoning = "".join(
+            str(d.get("text", "")) for d in message["reasoning_details"]
+            if isinstance(d, dict) and d.get("text")
+        )
+    if reasoning:
+        content.append({"type": "thinking", "thinking": reasoning})
     if message.get("content"):
         content.append({"type": "text", "text": message["content"]})
     for tc in message.get("tool_calls") or []:
@@ -379,6 +415,8 @@ def convert_response_openai_to_anthropic(openai_resp: dict, model: str) -> dict:
             args = {"raw": fn.get("arguments", "")}
         content.append({"type": "tool_use", "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),
                         "name": fn.get("name", ""), "input": args})
+    if not content:
+        content.append({"type": "text", "text": ""})
 
     stop_reason = {
         "stop": "end_turn",
@@ -410,7 +448,7 @@ class OpenaiToAnthropicSSE:
         self.started = False
         self.block_open = False
         self.block_index = 0
-        self.tool_block = False
+        self.block_type: str | None = None  # None / "thinking" / "text" / "tool"
         self.closed = False
 
     @staticmethod
@@ -450,8 +488,23 @@ class OpenaiToAnthropicSSE:
                             "usage": {"input_tokens": 0, "output_tokens": 0}},
             }))
 
+        # 推理内容（deepseek 系 delta.reasoning_content / 部分上游用 delta.reasoning）→ thinking 块
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+        if reasoning:
+            if self.block_open and self.block_type != "thinking":
+                out.append(self._ev("content_block_stop", {"type": "content_block_stop", "index": self.block_index}))
+                self.block_open = False
+                self.block_index += 1
+            if not self.block_open:
+                out.append(self._ev("content_block_start", {"type": "content_block_start", "index": self.block_index,
+                                                            "content_block": {"type": "thinking", "thinking": ""}}))
+                self.block_open = True
+                self.block_type = "thinking"
+            out.append(self._ev("content_block_delta", {"type": "content_block_delta", "index": self.block_index,
+                                                        "delta": {"type": "thinking_delta", "thinking": reasoning}}))
+
         if delta.get("content"):
-            if self.block_open and self.tool_block:
+            if self.block_open and self.block_type != "text":
                 out.append(self._ev("content_block_stop", {"type": "content_block_stop", "index": self.block_index}))
                 self.block_open = False
                 self.block_index += 1
@@ -459,7 +512,7 @@ class OpenaiToAnthropicSSE:
                 out.append(self._ev("content_block_start", {"type": "content_block_start", "index": self.block_index,
                                                             "content_block": {"type": "text", "text": ""}}))
                 self.block_open = True
-                self.tool_block = False
+                self.block_type = "text"
             out.append(self._ev("content_block_delta", {"type": "content_block_delta", "index": self.block_index,
                                                         "delta": {"type": "text_delta", "text": delta["content"]}}))
 
@@ -474,7 +527,7 @@ class OpenaiToAnthropicSSE:
                                                                               "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),
                                                                               "name": fn["name"], "input": {}}}))
                 self.block_open = True
-                self.tool_block = True
+                self.block_type = "tool"
             if fn.get("arguments"):
                 out.append(self._ev("content_block_delta", {"type": "content_block_delta", "index": self.block_index,
                                                             "delta": {"type": "input_json_delta", "partial_json": fn["arguments"]}}))

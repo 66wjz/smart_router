@@ -5,6 +5,25 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-08-12 - FB-020 归档（CH-018）+ 文档同步闭环
+- 用户实测确认通过 → 归档：变更文档 CH-018 移入 docs/_changes/archived/；_changes/README 登记同步去向
+- 同步回原始文档（6 份）：API契约（1.4 错误格式表 + 2.2 messages + 新增 2.3 Responses + 变更记录）、接口文档（通用错误约定 + 入站协议矩阵 + 变更记录）、面向客户的功能清单（D018c 新增）、五列对应矩阵（CH-018 行 + 变更记录）、README（三协议入站能力对齐段）、docs/变更记录.md（2026-08-12 CH-018 段）
+- feedback-log FB-020 状态更新为已归档；STATE.md 维护迭代记录追加
+
+### 2026-08-12 - FB-020 二期：三协议错误格式统一 + 推理模型 reasoning 映射（已部署生产验证）
+- 用户实测发现：deepseek 不支持图时 messages/responses 表现为"超时无反馈"（实为错误格式客户端解析不了）；mimo-v2.5（推理模型）在 messages/responses 有空内容/无结果
+- 二期修复（5 文件）：chat.py/messages.py/responses.py 三入站错误统一为各协议标准格式（openai/anthropic/responses）；anthropic_adapter 非流式 reasoning→thinking 块 + 流式 thinking_delta；responses_adapter 非流式 reasoning item + 流式 reasoning_summary_text.delta
+- 关键发现：opencode go 上游流式推理字段是 `delta.reasoning`（非 deepseek 官方 `reasoning_content`），抓上游原始 SSE 确认后兼容两个字段名
+- 验证：本地 16 用例全过（含真实字段格式）+ 生产 11 项全过（三协议错误格式 / mimo 非流式与流式 thinking / responses reasoning）；部署 deploy_fb020_r2.py
+- 状态：待用户实测确认后归档
+
+### 2026-08-12 - FB-020 一期：入站丢图片修复（A 线 bug）：anthropic/responses 入站补图片块映射
+- 用户反馈：Chatbox Claude 兼容模式发图 AI 回复但看不到图；Responses 模式发图空回复；OpenAI 兼容正常（报"所有模型均不可用"= 图片真实透传后被不支持图片的模型拒绝）
+- 根因定位：CH-009 入站 `_anthropic_content_to_openai` 只处理 text/tool_use/tool_result，漏 image 块；CH-010 入站 `convert_request_responses_to_openai` 只处理 input_text/output_text/text，漏 input_image 块
+- 修复（2 文件）：anthropic_adapter 新增 `_anthropic_image_block_to_openai`（base64→data URI / url 直传）；responses_adapter message 分支补 input_image→image_url；content 纯文本保持 str 不回归、混合时转块列表
+- 验证：compileall + 5 用例全过（anthropic 混合/纯文本/仅图片 + responses 混合/纯文本/仅图片 + 闭环 image 无损）
+- 状态：待部署云服务器 + 用户实测
+
 ### 2026-08-11 - v5.1.0 版本收口：文档对齐 + 版本号 + tag
 - 文档缺口盘点（marker 扫描）：数据库设计补 up_upstream.groups 列 + format 三协议 + 3.8 交集语义；API契约/接口文档补 upstream.groups 字段与 responses 协议；系统核心流程表速览补 groups；功能清单补 1.3.2 智能重试/1.5.2 多分组/2.2.1 仪表盘双视角；README 修订（版本头/双定位/多分组/三协议接入示例/FRONTEND_DIST 本地托管说明/八表/智能路由折叠菜单；修正"当前唯一入站协议"过期表述）
 - 版本号：FastAPI version=5.1.0、启动日志、Login/顶栏 v5.1
