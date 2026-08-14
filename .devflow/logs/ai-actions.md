@@ -5,6 +5,13 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-08-12 - FB-021 项目补齐 V5.2 流程缺口（B 线-小，已归档）
+- 按 skill V5.2 新规则对项目做缺口盘点：无脱敏配置模板、.gitignore 未覆盖密钥/日志/缓存、_changes/README 缺长期台账
+- 补齐：新增 config.example.yaml（脱敏模板，真实 config.yaml 不入库）；.gitignore 对照 skill templates/gitignore.md 增强；_changes/README 补长期台账区
+- 同步：README（文档索引加 config.example.yaml）、变更记录、feedback-log（FB-021）、STATE.md（维护迭代记录）
+- 验证：config.example.yaml 无真实凭据；git 跟踪文件敏感扫描全绿；无功能/接口/行为变化；变更文档归档至 _changes/archived/
+- 状态：已同步+已归档；待 commit/push
+
 ### 2026-08-12 - FB-020 归档（CH-018）+ 文档同步闭环
 - 用户实测确认通过 → 归档：变更文档 CH-018 移入 docs/_changes/archived/；_changes/README 登记同步去向
 - 同步回原始文档（6 份）：API契约（1.4 错误格式表 + 2.2 messages + 新增 2.3 Responses + 变更记录）、接口文档（通用错误约定 + 入站协议矩阵 + 变更记录）、面向客户的功能清单（D018c 新增）、五列对应矩阵（CH-018 行 + 变更记录）、README（三协议入站能力对齐段）、docs/变更记录.md（2026-08-12 CH-018 段）
