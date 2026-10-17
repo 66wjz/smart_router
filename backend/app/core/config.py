@@ -12,10 +12,12 @@ from app.core.key_pool import KeyPool
 from app.core.probe_schedule import is_active as schedule_is_active
 from app.repositories import (
     AggregatedNameRepository,
+    AggregationRepository,
     ApiKeyRepository,
     ModelGroupRepository,
     PointerRepository,
     ProbeConfigRepository,
+    ProbeTemplateRepository,
     RuleRepository,
     SettingRepository,
     UpstreamKeyRepository,
@@ -38,6 +40,9 @@ class AppConfig:
         self._aggregated_names: list[str] = []
         self._model_groups: dict[str, dict] = {}
         self._probe_configs: dict[str, dict] = {}
+        # CH-023：统一聚合实体（static / rule）+ 探测模板
+        self._aggregations: dict[str, dict] = {}
+        self._probe_templates: list[dict] = []
         self._settings: dict = {}
         self._repos = {
             "upstream": UpstreamRepository(),
@@ -48,6 +53,8 @@ class AppConfig:
             "aggregated": AggregatedNameRepository(),
             "model_group": ModelGroupRepository(),
             "probe_config": ProbeConfigRepository(),
+            "aggregation": AggregationRepository(),
+            "probe_template": ProbeTemplateRepository(),
             "setting": SettingRepository(),
         }
         self.key_pool = KeyPool()
@@ -69,16 +76,43 @@ class AppConfig:
                 self._aggregated_names = self._repos["aggregated"].list_names()
                 self._model_groups = self._repos["model_group"].list_all()
                 self._probe_configs = self._repos["probe_config"].list_all()
+                self._aggregations = self._repos["aggregation"].list_all()
+                self._probe_templates = self._repos["probe_template"].list_all()
                 self._settings = self._repos["setting"].get_all()
+                self._sync_legacy_views()
             except sqlite3.OperationalError:
                 log.warning("数据库表不存在，配置为空（请先执行 seed.py 初始化）")
                 self._upstreams, self._rules = [], []
                 self._api_keys, self._pointers = [], []
                 self._aggregated_names, self._settings = [], {}
                 self._model_groups, self._probe_configs = {}, {}
+                self._aggregations, self._probe_templates = {}, []
             self._load_upstream_keys()
             log.info(f"配置已加载: {len(self._upstreams)} 上游源, {len(self._rules)} 规则, "
-                     f"{len(self._api_keys)} 密钥, {len(self._pointers)} 别名")
+                     f"{len(self._api_keys)} 密钥, {len(self._pointers)} 别名, "
+                     f"{len(self._aggregations)} 聚合")
+
+    def _sync_legacy_views(self) -> None:
+        """把统一聚合实体投射回旧视图（CH-023）
+
+        - `_aggregated_names` ← kind=rule 且启用的名字
+        - `_model_groups`     ← kind=static 的行（结构 {upstreams, enabled}）
+
+        这样既有的路由/聚合读取路径（collect_model_upstreams / resolve_group_candidates /
+        collect_group_members / is_model_group）无需改动即可继续工作。
+        统一表为空时（未迁移的老库）保留旧表加载结果。
+        """
+        if not self._aggregations:
+            return
+        self._aggregated_names = [
+            name for name, a in self._aggregations.items()
+            if a.get("kind") == "rule" and a.get("enabled", True)
+        ]
+        self._model_groups = {
+            name: {"upstreams": a.get("members") or [], "enabled": a.get("enabled", True)}
+            for name, a in self._aggregations.items()
+            if a.get("kind") == "static"
+        }
 
     def _load_upstream_keys(self) -> None:
         """加载各上游的启用 Key 列表（缺失时回退到 up_upstream.api_key 单 Key）"""
@@ -385,16 +419,26 @@ class AppConfig:
             return copy.deepcopy(self._model_groups)
 
     def save_model_group(self, model: str, upstreams: list[dict], enabled: bool = True) -> None:
-        """保存单个模型的聚合配置并热加载"""
-        self._repos["model_group"].upsert(model, upstreams, enabled)
-        with self._lock:
-            self._model_groups = self._repos["model_group"].list_all()
+        """保存 static 聚合（写入统一表，保留已有探测配置）"""
+        existing = self._aggregations.get(model) or {}
+        self._repos["aggregation"].upsert(model, {
+            "kind": "static",
+            "members": upstreams,
+            "enabled": enabled,
+            "probe_enabled": existing.get("probe_enabled", False),
+            "template_id": existing.get("template_id"),
+            "sort_mode": existing.get("sort_mode", "stable"),
+            "interval_seconds": existing.get("interval_seconds"),
+            "slow_threshold_seconds": existing.get("slow_threshold_seconds"),
+            "schedule": existing.get("schedule") or {},
+            "remark": existing.get("remark") or "",
+        })
+        self._refresh_unified()
 
     def delete_model_group(self, model: str) -> None:
         """删除人工配置 → 该模型回到自动发现"""
-        self._repos["model_group"].delete(model)
-        with self._lock:
-            self._model_groups = self._repos["model_group"].list_all()
+        self._repos["aggregation"].delete(model)
+        self._refresh_unified()
 
     def discover_model_sources(self, model_name: str) -> list[str]:
         """自动发现同名来源（忽略人工配置），供聚合页展示"自动发现"基线"""
@@ -430,21 +474,85 @@ class AppConfig:
         )
 
     def save_probe_config(self, model: str, data: dict) -> None:
-        """保存某聚合组的探测策略并热加载"""
+        """保存某聚合的探测策略（CH-023 写入统一表；自动发现的组仍写旧表）"""
+        existing = self._aggregations.get(model)
+        if existing is not None:
+            self._repos["aggregation"].upsert(model, {
+                "kind": existing.get("kind") or "static",
+                "members": existing.get("members") or [],
+                "enabled": existing.get("enabled", True),
+                "probe_enabled": bool(data.get("enabled")),
+                "template_id": data.get("template_id", existing.get("template_id")),
+                "sort_mode": data.get("sort_mode") or "stable",
+                "interval_seconds": data.get("interval_seconds"),
+                "slow_threshold_seconds": data.get("slow_threshold_seconds"),
+                "schedule": data.get("schedule") or {},
+                "remark": existing.get("remark") or "",
+            })
         self._repos["probe_config"].upsert(model, data)
+        self._refresh_unified()
         with self._lock:
             self._probe_configs = self._repos["probe_config"].list_all()
 
     def delete_probe_config(self, model: str) -> None:
-        """删除组探测配置（该组回到"不探测"，全局探测不受影响）"""
+        """关闭某聚合的定时探测（该组回到"不探测"，全局探测不受影响）"""
+        existing = self._aggregations.get(model)
+        if existing is not None:
+            self._repos["aggregation"].upsert(model, {
+                "kind": existing.get("kind") or "static",
+                "members": existing.get("members") or [],
+                "enabled": existing.get("enabled", True),
+                "probe_enabled": False,
+                "template_id": None,
+                "sort_mode": "stable",
+                "interval_seconds": None,
+                "slow_threshold_seconds": None,
+                "schedule": {},
+                "remark": existing.get("remark") or "",
+            })
         self._repos["probe_config"].delete(model)
+        self._refresh_unified()
         with self._lock:
             self._probe_configs = self._repos["probe_config"].list_all()
 
     def group_probe_settings(self, group_name: str) -> dict:
-        """某聚合组的生效探测参数：组配置 → 全局 latency_probe → 内置默认"""
-        conf = self._probe_configs.get(group_name) or {}
+        """某聚合的生效探测参数（CH-023）
+
+        优先级：探测模板（若挂）→ 聚合自配 → 全局 latency_probe → 内置默认。
+        挂模板时模板的 interval/slow/sort/schedule 全部生效，聚合自配字段被忽略。
+        """
         global_cfg = self.probe_config
+        entity = self._aggregations.get(group_name)
+        if entity is not None:
+            conf = {
+                "enabled": bool(entity.get("probe_enabled")),
+                "interval_seconds": entity.get("interval_seconds"),
+                "slow_threshold_seconds": entity.get("slow_threshold_seconds"),
+                "sort_mode": entity.get("sort_mode"),
+                "schedule": entity.get("schedule"),
+            }
+            configured = bool(entity.get("probe_enabled") or entity.get("template_id")
+                              or entity.get("interval_seconds") or entity.get("schedule"))
+        else:
+            conf = self._probe_configs.get(group_name) or {}
+            configured = bool(conf)
+
+        template = self._template_of(entity) if entity is not None else None
+        if template is not None:
+            return {
+                "enabled": bool(conf.get("enabled", False)),
+                "interval_seconds": template.get("interval_seconds")
+                or global_cfg.get("interval_seconds", 120),
+                "slow_threshold_seconds": template.get("slow_threshold_seconds")
+                if template.get("slow_threshold_seconds") is not None
+                else global_cfg.get("slow_threshold_seconds", 10),
+                "sort_mode": template.get("sort_mode") or "stable",
+                "schedule": template.get("schedule") or global_cfg.get("schedule") or {"mode": "always"},
+                "configured": True,
+                "template_id": template.get("id"),
+                "template_name": template.get("name", ""),
+            }
+
         return {
             "enabled": bool(conf.get("enabled", False)),
             "interval_seconds": conf.get("interval_seconds") or global_cfg.get("interval_seconds", 120),
@@ -453,8 +561,46 @@ class AppConfig:
             else global_cfg.get("slow_threshold_seconds", 10),
             "sort_mode": conf.get("sort_mode") or "stable",
             "schedule": conf.get("schedule") or global_cfg.get("schedule") or {"mode": "always"},
-            "configured": bool(conf),
+            "configured": configured,
+            "template_id": None,
+            "template_name": "",
         }
+
+    def _template_of(self, entity: dict | None) -> dict | None:
+        """取聚合挂载的探测模板（未挂或模板已删除时返回 None）"""
+        if not entity:
+            return None
+        tid = entity.get("template_id")
+        if tid is None:
+            return None
+        for t in self._probe_templates:
+            if t.get("id") == tid:
+                return t
+        return None
+
+    def rule_candidate_units(self) -> list[dict]:
+        """所有路由规则候选展开后的 (上游源, 真实模型) 列表（CH-023）
+
+        rule 聚合的探测对象 = 全部规则候选的并集：探测时无法预知请求会命中哪条规则，
+        只能全探。聚合名形式的候选会继续展开为各源真实模型名。
+        """
+        group_members = self.collect_group_members()
+        units: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for rule in self._rules:
+            for c in rule.get("candidates", []):
+                model = c.get("model", "")
+                expanded = (
+                    [(m["upstream"], m["model"]) for m in group_members[model]]
+                    if model in group_members
+                    else [(c.get("upstream", self.default_upstream), model)]
+                )
+                for uid, actual in expanded:
+                    if not uid or not actual or (uid, actual) in seen:
+                        continue
+                    seen.add((uid, actual))
+                    units.append({"upstream": uid, "model": actual})
+        return units
 
     def collect_group_members(self) -> dict[str, list[dict]]:
         """所有聚合组及其成员（人工配置优先，否则同名自动发现）
@@ -514,11 +660,14 @@ class AppConfig:
         return False
 
     def collect_probe_plan(self) -> dict[str, dict]:
-        """全局去重后的探测计划（CH-021）
+        """全局去重后的探测计划（CH-021 / CH-023）
 
-        单元 = (上游源, 该源真实模型名)，全局唯一；聚合组只"引用"单元，不拥有。
+        单元 = (上游源, 该源真实模型名)，全局唯一；聚合只"引用"单元，不拥有。
         返回 {f"{upstream}:{model}": {upstream, model, interval, groups, sources, schedule}}
-        多个启用组引用同一单元时，间隔取最小值（最严格的组决定新鲜度）。
+        多个启用探测的聚合引用同一单元时，间隔取最小值（最严格的组决定新鲜度）。
+
+        CH-023：rule 聚合也纳入计划——其探测对象是「所有规则候选的并集」，
+        并在单元上记录 groups，便于排班表看出某单元是被谁拉起来的。
         """
         global_cfg = self.probe_config
         global_interval = global_cfg.get("interval_seconds", 120)
@@ -527,7 +676,7 @@ class AppConfig:
         plan: dict[str, dict] = {}
 
         def add(upstream_id: str, model: str, source: str, group: str | None = None,
-                interval: int | None = None) -> None:
+                interval: int | None = None, schedule: dict | None = None) -> None:
             if not upstream_id or not model:
                 return
             key = f"{upstream_id}:{model}"
@@ -539,36 +688,45 @@ class AppConfig:
                     "interval": interval or global_interval,
                     "groups": [group] if group else [],
                     "sources": [source],
+                    "schedules": [schedule] if schedule else [],
                 }
                 return
             if group and group not in entry["groups"]:
                 entry["groups"].append(group)
             if source not in entry["sources"]:
                 entry["sources"].append(source)
+            if schedule and schedule not in entry["schedules"]:
+                entry["schedules"].append(schedule)
             if interval:
                 entry["interval"] = min(entry["interval"], interval)
 
-        # 1) 聚合组成员
+        # 1) static 聚合组成员（含自动发现的同名聚合）
         for group_name, members in self.collect_group_members().items():
             settings = self.group_probe_settings(group_name)
             if not settings["enabled"]:
                 continue
             for m in members:
-                add(m["upstream"], m["model"], "group", group_name, settings["interval_seconds"])
+                add(m["upstream"], m["model"], "group", group_name,
+                    settings["interval_seconds"], settings["schedule"])
 
-        # 2) 路由规则候选 + 3) 别名目标（受全局开关注册）
-        #    注意：若规则/别名引用的是聚合名，必须展开成各源的真实模型名，
+        # 2) rule 聚合：候选并集，按该聚合自己的探测配置计入
+        for name, entity in self._aggregations.items():
+            if entity.get("kind") != "rule" or not entity.get("enabled", True):
+                continue
+            settings = self.group_probe_settings(name)
+            if not settings["enabled"]:
+                continue
+            for unit in self.rule_candidate_units():
+                add(unit["upstream"], unit["model"], "group", name,
+                    settings["interval_seconds"], settings["schedule"])
+
+        # 3) 路由规则候选 + 4) 别名目标（受全局开关注册）
+        #    若规则/别名引用的是聚合名，必须展开成各源的真实模型名，
         #    否则会产生 "源:聚合名" 这种不存在的探测单元（CH-022 修复）
         if global_enabled:
+            for unit in self.rule_candidate_units():
+                add(unit["upstream"], unit["model"], "rule")
             group_members = self.collect_group_members()
-            for rule in self._rules:
-                for c in rule.get("candidates", []):
-                    model = c.get("model", "")
-                    if model in group_members:
-                        for m in group_members[model]:
-                            add(m["upstream"], m["model"], "rule")
-                    else:
-                        add(c.get("upstream", self.default_upstream), model, "rule")
             for p in self._pointers:
                 target = p.get("target_model", "")
                 if target in group_members:
@@ -592,15 +750,80 @@ class AppConfig:
     def probe_plan_active(self, item: dict) -> bool:
         """该探测单元当前是否允许探测
 
-        单元被多个"启用探测的组"引用时，任一组处于探测时段即探测（并集语义）；
+        单元被多个"启用探测的聚合"引用时，任一组处于探测时段即探测（并集语义）；
         若只有规则/别名引用，则看全局 schedule。
         """
         for group_name in item.get("groups") or []:
             if schedule_is_active(self.group_probe_settings(group_name)["schedule"]):
                 return True
         if item.get("groups"):
-            return False  # 只被聚合组引用，且这些组当前都在时段外
+            return False  # 只被聚合引用，且这些聚合当前都在时段外
         return schedule_is_active(self.probe_config.get("schedule"))
+
+    # ============================================================
+    # 统一聚合实体 + 探测模板（CH-023）
+    # ============================================================
+
+    def sync_unified_tables(self) -> None:
+        """执行增量 SQL（幂等建表 + 迁移），供启动时补齐 CH-023 结构"""
+        import os
+        from app.core.database import get_conn
+
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+            "sql", "increment", "07_增量_20261017_聚合统一与探测模板.sql",
+        )
+        with open(path, encoding="utf-8") as f:
+            get_conn().executescript(f.read())
+
+    def _refresh_unified(self) -> None:
+        """只重载统一聚合/模板视图（不动 Key 池与上游缓存），供聚合 CRUD 后热更新"""
+        with self._lock:
+            self._aggregations = self._repos["aggregation"].list_all()
+            self._probe_templates = self._repos["probe_template"].list_all()
+            self._sync_legacy_views()
+
+    def get_aggregations(self) -> dict[str, dict]:
+        with self._lock:
+            return copy.deepcopy(self._aggregations)
+
+    def get_probe_templates(self) -> list[dict]:
+        with self._lock:
+            return copy.deepcopy(self._probe_templates)
+
+    def save_aggregation(self, name: str, data: dict) -> None:
+        """保存聚合（新建/更新）并刷新内存视图"""
+        self._repos["aggregation"].upsert(name, data)
+        self._refresh_unified()
+
+    def delete_aggregation(self, name: str) -> bool:
+        ok = self._repos["aggregation"].delete(name)
+        if ok:
+            self._refresh_unified()
+        return ok
+
+    def save_probe_template(self, data: dict, template_id: int | None = None) -> int:
+        """新建或更新探测模板；返回模板 id"""
+        if template_id:
+            self._repos["probe_template"].update(template_id, data)
+            tid = template_id
+        else:
+            tid = self._repos["probe_template"].create(data)
+        self._refresh_unified()
+        return tid
+
+    def delete_probe_template(self, template_id: int) -> list[str]:
+        """删除模板：引用它的聚合 template_id 置空（回退自配 → 全局），返回受影响聚合名"""
+        affected = self._repos["aggregation"].clear_template_refs(template_id)
+        self._repos["probe_template"].delete(template_id)
+        self._refresh_unified()
+        return affected
+
+    def is_rule_aggregation(self, name: str) -> bool:
+        """是否为 rule 类型聚合（候选来自路由规则）"""
+        with self._lock:
+            entity = self._aggregations.get(name)
+        return bool(entity and entity.get("kind") == "rule")
 
     # ============================================================
     # API Key 校验
@@ -770,9 +993,34 @@ class AppConfig:
         return ok
 
     def set_aggregated_names(self, names: list[str]) -> None:
-        self._repos["aggregated"].replace_all(names)
-        with self._lock:
-            self._aggregated_names = self._repos["aggregated"].list_names()
+        """整体替换 rule 类型聚合名（CH-023：写统一表，保留已有探测配置）"""
+        cleaned: list[str] = []
+        for n in names or []:
+            name = str(n).strip()
+            if name and name not in cleaned:
+                cleaned.append(name)
+
+        existing_rule = {
+            name for name, a in self._aggregations.items() if a.get("kind") == "rule"
+        }
+        for name in existing_rule - set(cleaned):
+            self._repos["aggregation"].delete(name)
+        for name in cleaned:
+            prev = self._aggregations.get(name) or {}
+            self._repos["aggregation"].upsert(name, {
+                "kind": "rule",
+                "members": [],
+                "enabled": True if prev.get("kind") == "rule" else prev.get("enabled", True),
+                "probe_enabled": prev.get("probe_enabled", False),
+                "template_id": prev.get("template_id"),
+                "sort_mode": prev.get("sort_mode", "stable"),
+                "interval_seconds": prev.get("interval_seconds"),
+                "slow_threshold_seconds": prev.get("slow_threshold_seconds"),
+                "schedule": prev.get("schedule") or {},
+                "remark": prev.get("remark") or "",
+            })
+        self._repos["aggregated"].replace_all(cleaned)
+        self._refresh_unified()
 
     def set_setting(self, key: str, value) -> None:
         self._repos["setting"].set(key, value)

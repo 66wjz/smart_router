@@ -286,11 +286,12 @@ class LatencyProbe:
 
     def sort_group_candidates(self, candidates: list[dict], group_name: str,
                               health: "ModelHealth | None" = None) -> list[dict]:
-        """聚合候选排序（CH-021）
+        """聚合候选排序（CH-021 / CH-023）
 
         T0 正常（ok 且未超慢阈值、未冷却）→ T1 偏慢/未知 → T2 不可用/冷却。
         stable：层内保持配置顺序；latency：层内按延迟升序（无数据最后）。
 
+        排序策略与慢阈值按统一聚合实体的生效值取（模板优先 → 自配 → 全局）。
         兜底：全部候选都落入 T2 时，直接返回配置顺序——绝不让"全 down"变成无候选 503。
         """
         if len(candidates) <= 1:

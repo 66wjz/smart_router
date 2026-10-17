@@ -46,22 +46,20 @@ const router = createRouter({
           meta: { title: '模型别名', icon: 'Link' },
         },
         {
-          path: 'latency',
-          name: 'Latency',
-          component: () => import('@/views/Latency.vue'),
-          meta: { title: '延迟面板', icon: 'TrendCharts' },
-        },
-        {
           path: 'aggregated',
           name: 'Aggregated',
           component: () => import('@/views/Aggregated.vue'),
           meta: { title: '聚合模型', icon: 'Collection' },
         },
+        // CH-023：延迟面板并入「聚合模型 → 探测计划」，旧书签重定向
+        {
+          path: 'latency',
+          redirect: { path: '/aggregated', query: { tab: 'plan' } },
+        },
+        // CH-023：路由参数拆分到「聚合模型 → 探测计划」与「系统设置 → 全局容错」
         {
           path: 'route-params',
-          name: 'RouteParams',
-          component: () => import('@/views/RouteParams.vue'),
-          meta: { title: '路由参数', icon: 'Zap' },
+          redirect: '/settings',
         },
         {
           path: 'usage',

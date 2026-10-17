@@ -102,8 +102,6 @@ const sidebarGroups = [
     items: [
       { key: 'rules', label: '路由规则', icon: 'sliders-horizontal', path: '/rules' },
       { key: 'aggregated', label: '聚合模型', icon: 'collection', path: '/aggregated' },
-      { key: 'latency', label: '延迟面板', icon: 'activity', path: '/latency' },
-      { key: 'route-params', label: '路由参数', icon: 'zap', path: '/route-params' },
     ],
   },
   {

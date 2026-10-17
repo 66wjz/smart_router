@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-16
+- 上次更新：2026-10-17
 
 ## 补建说明
 
@@ -39,6 +39,7 @@
 | CH-020 | 异名模型聚合（归一化建议 + 手动组合）+ 后台信息架构重组 + 拖拽体验修复（B 线-大） | ✅ 已实现+本地验证（2026-10-16），已归档；**未部署，待用户授权上线** | 本地 |
 | CH-021 | 聚合模型独立探测（探测单元全局去重）+ 探测时段（星期/时段窗口/跨夜）+ 两档智能排序 + 探测与 Key 冷却解耦 + 用量按「源×真实模型」记账（B 线-大） | ✅ 已实现+本地验证（2026-10-17），已归档；**未部署，待用户授权上线** | 本地 |
 | CH-022 | 演示数据环境（独立 demo.db + seed/clear/run_demo）+ 仪表盘重设计（健康条/5指标/7天趋势/上游贡献/上游卡片/聚合组/待关注）+ 修复聚合名误探测、今日统计口径、SVG 尺寸三处问题（B 线-大） | ✅ 已实现+本地验证（2026-10-17），已归档；**未部署，待用户授权上线** | 本地 |
+| CH-023 | 聚合模型统一（`agg_unified`：static/rule 同一实体）+ 探测模板（`agg_probe_template`，模板优先不可覆盖）+ rule 聚合纳入探测计划（候选并集）+ 探测排班表（按小时/按星期）+ 信息架构归位（延迟面板/路由参数拆分）+ 保留 rule 动态权重排序（B 线-大） | ✅ 已实现+本地验证（2026-10-17），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 
 ## 历史经验参考
 
@@ -81,3 +82,4 @@
 - 2026-10-16：**CH-020 完成本地实现+验证并归档（未部署）**：①异名模型聚合——`agg_model_group.upstreams` 成员新增 `model` 字段，新增归一化建议（去前缀/小写/符号归一）与 source-models 端点，前端支持一键合并、手动组合异名成员；`resolve_group_candidates` 使候选携带各源真实模型名；②后台信息架构重组——侧边栏四组（无分组/智能路由/统计/系统），新增「路由参数」页（延迟探测/请求重试/智能重试/故障转移/手动重载），仪表盘收敛为中转视角，延迟面板吸收路由视角，移除顶栏全局热重载；③拖拽体验修复——补插入位置指示线，加 `group` 隔离与 `evt.from/to` uid 比对，根治跨源拖拽 404「上游源不存在」。验证：后端 `test/verify_alias_ch019.py` 13/13、前端构建通过、浏览器实测跨源拖拽不再发请求
 - 2026-10-17：**CH-021 完成本地实现+验证并归档（未部署）**：①探测单元全局去重——`collect_probe_plan()` 取「规则候选 ∪ 别名目标 ∪ 聚合组成员」，按 `(upstream, 真实模型)` 唯一，多组引用时间隔取最小；②聚合组独立探测——新表 `agg_probe_config`（与 `agg_model_group` 解耦，自动发现组也能配）+ 4 个管理端点；③探测时段——新增 `core/probe_schedule.py`，支持 `always` / `window`（星期 1~7 + 多时段窗口 + 跨夜），快捷模板三个；④调度改造——按单元到期 + `asyncio.gather` + 信号量限流，探测失败默认不计 Key 冷却（`count_key_failures=false`）；⑤两档排序——`stable`（保序、超慢沉底）/ `latency`（延迟升序），T0/T1/T2 分层，全 down 回退配置顺序；⑥用量按单元——`log_usage.upstream_model` + `by-unit` 端点。验证：`verify_probe_ch021.py` 24/24、`verify_probe_ch021_db.py` 19/19、`verify_probe_ch021_api.py` 32/32、`verify_usage_unit_ch021.py` 8/8、`npm run build` 通过、浏览器实测探测保存与计划联动通过；同步 9 份文档
 - 2026-10-17：**CH-022 完成本地实现+验证并归档（未部署）**：①演示环境——`core/database.py` 支持 `SMART_ROUTER_DB`，`test/seed_demo_ch022.py` 生成独立 `backend/demo.db`（4 上游 / 3 聚合组覆盖探测开·速度优先·限时段、开·稳定优先、关三态 / 3 客户端 Key / 2 规则 / 14 天 1392 条用量 / 一组未合并异名模型用于体验一键合并），`run_demo.ps1` 启动到 10198；②仪表盘重设计——健康条 + 5 指标卡（今日请求含「今日至今 vs 昨日同期」环比）+ 7 天双指标 SVG 趋势 + 上游贡献占比 + 上游源卡片 + 聚合组概览 + 需要关注；`GET /admin/api/dashboard` 扩展 `usage_today/usage_7d/trend/upstream_usage/groups/attention/probe_summary`；③修复三处问题——探测计划把聚合名当模型名（单元 11→7）、今日统计误用 `created_at`（1392→56）、全局 `svg{width:1em!important}` 压扁趋势图。验证：浏览器实测全模块正常、CH-021 回归 24/24 + 8/8、`npm run build` 通过；同步 8 份文档
+- 2026-10-17：**CH-023 完成本地实现+验证并归档（未 push、未部署）**：①聚合实体统一——新表 `agg_unified`（`kind` = static / rule），旧 `agg_model_group` / `agg_aggregated_name` 幂等迁移搬入，旧表保留；`_sync_legacy_views()` 把统一表投射回旧内存视图，既有路由链路零改动；②探测模板——新表 `agg_probe_template`，聚合挂模板后模板值完全覆盖自配（不可被组覆盖），改模板全组同步，删模板回退自配→全局；③rule 聚合纳入探测计划——探测对象 = 全部规则候选并集，单元记录 `groups` / `group_kinds`；④探测排班表——按小时着色（探测中/时段外/关闭）+ 合并/按星期视图 + 间隔/次时/次日/引用聚合，支持跨夜；⑤保留原有排序语义——rule 走 `get_ordered_candidates`（priority + 动态权重 `base_w × (base_latency/latency)²`），static 走 `sort_group_candidates`（stable/latency 分层，全 down 回退）；⑥信息架构归位——侧边栏移除延迟面板/路由参数，聚合页三标签，容错参数搬入系统设置，`/latency`→`/aggregated?tab=plan`、`/route-params`→`/settings` 重定向；⑦修复三处问题——增量 SQL 路径少折一层目录、`PUT /aggregations` 无法用 null 清空字段（改 `model_fields_set`）、自动发现聚合从列表消失。验证：`verify_migration_ch023.py` 全通过、`verify_aggregation_ch023.py` 30 项全通过、`verify_api_ch023.py` 40 项全通过、`npm run build` 通过、demo 库浏览器实测三标签/模板挂载/排班表/重定向全正常

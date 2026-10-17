@@ -64,10 +64,14 @@ async def save_model_group(model: str, req: ModelGroupUpdate, request: Request, 
 
 @router.delete("/model-groups")
 async def delete_model_group(model: str, request: Request, _=Depends(check_auth)):
-    """删除人工配置 → 该模型回到自动发现"""
+    """删除人工配置 → 该模型回到自动发现（CH-023 删除统一实体中的 static 行）"""
     svc: ConfigService = request.app.state.config_service
+    cfg = request.app.state.config
     if not model:
         raise HTTPException(400, "model 必填")
+    entity = cfg.get_aggregations().get(model)
+    if entity is not None and entity.get("kind") == "rule":
+        raise HTTPException(400, f"{model} 是规则聚合，请在聚合模型页的「规则聚合」中移除")
     svc.delete_model_group(model)
     return {"ok": True, "model": model}
 
@@ -211,13 +215,13 @@ async def list_probe_configs(request: Request, _=Depends(check_auth)):
 
 @router.put("/model-groups/probe")
 async def save_group_probe(model: str, req: GroupProbeUpdate, request: Request, _=Depends(check_auth)):
-    """保存某聚合组的探测策略（组配置优先于全局，留空字段跟随全局）"""
+    """保存某聚合的探测策略（CH-023 兼容入口，转调统一实体）"""
     if not model:
         raise HTTPException(400, "model 必填")
     svc: ConfigService = request.app.state.config_service
     cfg = request.app.state.config
-    if model not in cfg.collect_group_members() and model not in cfg.get_probe_configs():
-        raise HTTPException(404, f"聚合组 {model} 不存在")
+    if model not in cfg.get_aggregations() and model not in cfg.collect_group_members():
+        raise HTTPException(404, f"聚合 {model} 不存在")
     data = req.model_dump()
     if data.get("schedule") is None:
         data["schedule"] = {"mode": "always"}

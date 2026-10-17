@@ -183,6 +183,7 @@ def drop_all(conn: sqlite3.Connection) -> None:
     tables = [
         "rule_candidate", "rule_rule", "api_api_key", "up_upstream_key", "up_upstream",
         "pt_pointer", "agg_aggregated_name", "agg_model_group", "agg_probe_config",
+        "agg_unified", "agg_probe_template",
         "log_usage", "sys_setting",
     ]
     for t in tables:
@@ -288,6 +289,51 @@ def seed_agg_names(conn: sqlite3.Connection) -> None:
     for name in ("smart-latest", "smart-chat"):
         conn.execute("INSERT INTO agg_aggregated_name (name) VALUES (?)", (name,))
     print("  [数据] 手写聚合名 2 个")
+
+
+# 探测模板（CH-023）：挂到聚合上后，聚合自配的探测参数全部失效
+PROBE_TEMPLATES = [
+    {
+        "name": "高频-交易时段",
+        "interval_seconds": 60, "slow_threshold_seconds": 5.0, "sort_mode": "latency",
+        "schedule": {"mode": "window", "days": [1, 2, 3, 4, 5],
+                     "windows": [{"start": "08:00", "end": "23:00"}]},
+        "remark": "工作日盘中高频探测，夜间与周末不探",
+    },
+    {
+        "name": "标准-全天",
+        "interval_seconds": 300, "slow_threshold_seconds": 8.0, "sort_mode": "stable",
+        "schedule": {"mode": "always", "days": [], "windows": []},
+        "remark": "5 分钟一轮，稳定优先",
+    },
+]
+
+# 聚合名 → 模板名（迁移后的 agg_unified 行上挂模板，同时开探测）
+AGG_TEMPLATE_BINDING = {
+    "deepseek-v4-1-flash": "高频-交易时段",
+    "qwen3-coder": "标准-全天",
+    "smart-latest": "标准-全天",
+}
+
+
+def seed_templates(conn: sqlite3.Connection) -> None:
+    """CH-023：写入探测模板，并把演示聚合挂到模板上"""
+    ids: dict[str, int] = {}
+    for t in PROBE_TEMPLATES:
+        cur = conn.execute(
+            "INSERT INTO agg_probe_template (name, interval_seconds, slow_threshold_seconds, "
+            "sort_mode, schedule, remark) VALUES (?,?,?,?,?,?)",
+            (t["name"], t["interval_seconds"], t["slow_threshold_seconds"], t["sort_mode"],
+             json.dumps(t["schedule"], ensure_ascii=False), t["remark"]),
+        )
+        ids[t["name"]] = cur.lastrowid
+    for agg, tpl in AGG_TEMPLATE_BINDING.items():
+        conn.execute(
+            "UPDATE agg_unified SET template_id = ?, probe_enabled = 1 WHERE name = ?",
+            (ids[tpl], agg),
+        )
+    print(f"  [数据] 探测模板 {len(PROBE_TEMPLATES)} 个，"
+          f"{len(AGG_TEMPLATE_BINDING)} 个聚合已挂模板")
 
 
 # ------------------------------------------------------------
@@ -401,6 +447,8 @@ def main() -> None:
             "increment/05_增量_20260811_上游多分组.sql",
             "06_用量统计与自动聚合.sql",
             "increment/06_增量_20261017_聚合探测配置.sql",
+            # CH-023：统一聚合 + 探测模板（迁移会自动把上面的旧表数据搬进新表）
+            "increment/07_增量_20261017_聚合统一与探测模板.sql",
         ):
             run_sql(conn, fn)
 
@@ -411,6 +459,9 @@ def main() -> None:
         seed_keys_rules(conn)
         seed_settings(conn)
         seed_agg_names(conn)
+        # 旧表数据写完后再跑一次 CH-023 迁移，把聚合搬进 agg_unified
+        run_sql(conn, "increment/07_增量_20261017_聚合统一与探测模板.sql")
+        seed_templates(conn)
         seed_usage(conn)
         conn.commit()
         print("\n[demo] 完成 ✅")

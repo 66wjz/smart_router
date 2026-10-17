@@ -472,27 +472,120 @@ Header: `Authorization: Bearer <token>`
 - **说明**: 删除后该组回到"不探测"，全局探测不受影响
 - **出参**: `{ "ok": true, "model": "..." }`
 
-### 4.26.6 全局探测计划（CH-021）
+### 4.26.6 全局探测计划（CH-021 / CH-023）
 
-- **路径**: `GET /admin/api/model-groups/probe-plan`
+- **路径**: `GET /admin/api/model-groups/probe-plan`（兼容保留） / `GET /admin/api/probe-plan`（推荐）
 - **鉴权**: JWT
 - **出参**:
 
 ```json
 { "summary": { "unit_count": 12, "member_refs": 16, "dedup_saved": 4,
-               "daily_requests": 17280, "global_interval": 360 },
+               "daily_requests": 17280, "global_interval": 360, "aggregation_count": 8 },
   "units": [
     { "key": "buddy:deepseek-v4.1-flash", "upstream": "buddy", "upstream_name": "Buddy",
-      "model": "deepseek-v4.1-flash", "groups": ["deepseek-v4-1-flash"], "sources": ["group"],
-      "interval": 60, "latency": 1.2, "status": "ok", "last_check": 1792228899,
+      "model": "deepseek-v4.1-flash",
+      "groups": ["deepseek-v4-1-flash", "smart-latest"],
+      "group_kinds": {"deepseek-v4-1-flash": "static", "smart-latest": "rule"},
+      "sources": ["group"],
+      "interval": 60,
+      "schedule": {"mode": "window", "days": [1,2,3,4,5], "windows": [{"start":"08:00","end":"23:00"}]},
+      "schedules": [{"mode": "window", "..."}],
+      "latency": 1.2, "status": "ok", "last_check": 1792228899,
       "stale": false, "active_now": true } ] }
 ```
 
 - **说明**:
-  - 探测单元 = `(上游源, 该源真实模型名)`，**全局唯一**；聚合组只引用不拥有
-  - 多组引用同一单元时 `interval` 取最小值；`daily_requests = Σ(86400/interval)`
+  - 探测单元 = `(上游源, 该源真实模型名)`，**全局唯一**；聚合只引用不拥有
+  - 多聚合引用同一单元时 `interval` 取最小值；`daily_requests = Σ(86400/interval)`
+  - `groups` 含 **rule 聚合**（其探测对象 = 所有规则候选并集），`group_kinds` 区分 `static` / `rule`
+  - `schedules` 为各引用聚合的生效时段；仅一个时 `schedule` 与其相同，多个时 `schedule` 回退 `{"mode":"always"}`（实际判定按并集，见 `active_now`）
   - `active_now=false` 表示当前处于该单元探测时段之外
   - `stale=true` 表示 `last_check` 超过 `3 × interval` 未更新
+
+### 4.28 统一聚合（CH-023）
+
+#### 4.28.1 聚合列表
+
+- **路径**: `GET /admin/api/aggregations`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{ "aggregations": [
+  { "name": "deepseek-v4-1-flash", "kind": "static", "enabled": true, "configured": true,
+    "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
+    "member_count": 3, "template_id": 1, "template_name": "高频-交易时段",
+    "probe": { "enabled": true, "interval_seconds": 60, "slow_threshold_seconds": 5,
+               "sort_mode": "latency", "schedule": {"mode":"window","..."},
+               "template_id": 1, "template_name": "高频-交易时段" },
+    "self_config": { "probe_enabled": true, "interval_seconds": 60,
+                     "slow_threshold_seconds": 5.0, "sort_mode": "latency", "schedule": {"..."} },
+    "remark": "" },
+  { "name": "smart-latest", "kind": "rule", "members": [], "member_count": 7,
+    "rule_names": ["默认对话", "视觉理解"] } ] }
+```
+
+- **说明**:
+  - `kind=static`：固定成员，`members` 为候选链路
+  - `kind=rule`：候选由路由规则运行时匹配，`members` 恒空，`member_count` 为规则候选并集的单元数
+  - `configured=false`：未人工配置、由同名模型自动发现
+  - `probe` 为**生效值**（模板优先 → 自配 → 全局）；`self_config` 为落库原值（编辑回显用）
+
+#### 4.28.2 新建 / 更新聚合
+
+- **路径**: `PUT /admin/api/aggregations?name={聚合名}`
+- **鉴权**: JWT
+- **入参**（均可选，未提供则保持原值）:
+
+```json
+{ "kind": "static|rule", "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
+  "enabled": true,
+  "probe_enabled": true, "template_id": 1,
+  "sort_mode": "stable|latency", "interval_seconds": 60, "slow_threshold_seconds": 5,
+  "schedule": {"mode":"always|window","days":[1,2,3,4,5],"windows":[{"start":"08:00","end":"23:00"}]},
+  "remark": "" }
+```
+
+- **语义**:
+  - `template_id` / `interval_seconds` / `slow_threshold_seconds` 支持**显式 `null` 清空**（后端用 `model_fields_set` 区分「未提供」与「传 null」）
+  - `kind=rule` 不允许传 `members`
+  - `template_id` 非空时必须存在
+- **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源或模板不存在
+
+#### 4.28.3 删除聚合
+
+- **路径**: `DELETE /admin/api/aggregations?name={聚合名}`
+- **出参**: `{ "ok": true, "name": "..." }`
+- **错误码**: 404 聚合不存在
+
+#### 4.28.4 rule 聚合的探测对象
+
+- **路径**: `GET /admin/api/aggregations/rule-units`
+- **鉴权**: JWT
+- **出参**: `{ "units": [{"upstream":"buddy","model":"deepseek-v4-1-flash","upstream_name":"Buddy"}] }`
+- **说明**: 所有路由规则候选展开后的并集（聚合名形式的候选已展开为各源真实模型名）
+
+### 4.29 探测模板（CH-023）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/api/probe-templates` | 列表，含 `ref_count` / `ref_names` |
+| POST | `/admin/api/probe-templates` | 新建 |
+| PUT | `/admin/api/probe-templates/{id}` | 更新 |
+| DELETE | `/admin/api/probe-templates/{id}` | 删除，返回 `affected`（受影响聚合名） |
+
+**入参**:
+
+```json
+{ "name": "高频-交易时段", "interval_seconds": 60, "slow_threshold_seconds": 5,
+  "sort_mode": "latency",
+  "schedule": {"mode":"window","days":[1,2,3,4,5],"windows":[{"start":"08:00","end":"23:00"}]},
+  "remark": "" }
+```
+
+- **校验**: `name` 非空且唯一；`interval_seconds ≥ 10`；`slow_threshold_seconds` 为 `null`/`0` 表示跟随全局，否则 ≥ 1；`sort_mode ∈ {stable, latency}`
+- **删除语义**: 引用方 `template_id` 置空，回退到自配 → 全局；聚合本身不删
+- **错误码**: 400 重名 / 404 模板不存在
 
 ### 4.27 用量汇总（CH-019）
 
@@ -564,15 +657,17 @@ Header: `Authorization: Bearer <token>`
 - **鉴权**: JWT
 - **入参**: `{ "rules": [...] }`（同上格式）
 
-### 4.8 聚合模型名
+### 4.8 聚合模型名（CH-023 起为兼容入口）
 
 - **路径**: `GET /admin/api/aggregated-names`
 - **鉴权**: JWT
 - **出参**: `{ "names": ["smart-latest", "smart-chat", "auto-chat"] }`
+- **说明**: 返回 `agg_unified` 中 `kind=rule` 且启用的聚合名；等价于 `GET /admin/api/aggregations` 按 `kind` 过滤
 
 - **路径**: `PUT /admin/api/aggregated-names`
 - **鉴权**: JWT
 - **入参**: `{ "names": ["smart-latest", "auto-chat"] }`
+- **说明**: 整体替换 rule 聚合集合（新增的建行、移除的删行），保留已有探测配置
 
 ### 4.9 模型别名列表
 
@@ -734,11 +829,13 @@ Header: `Authorization: Bearer <token>`
 | 规则 YAML 编辑 | GET/PUT /admin/api/rules | rule_rule, rule_candidate |
 | 别名增删改查 | /admin/api/model-pointers | pt_pointer |
 | 延迟与健康状态 | GET /status | （内存状态） |
-| 聚合名管理 | GET/PUT /admin/api/aggregated-names | agg_aggregated_name |
+| 聚合名管理 | GET/PUT /admin/api/aggregated-names（兼容）；GET/PUT/DELETE /admin/api/aggregations | agg_unified（kind=rule） |
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
-| 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_model_group |
-| 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups；GET .../suggestions；GET .../source-models | agg_model_group |
-| 聚合组独立探测 | GET/PUT/DELETE /admin/api/model-groups/probe*；GET .../probe-plan | agg_probe_config |
+| 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_unified（kind=static, members） |
+| 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups（兼容）；GET/PUT/DELETE /admin/api/aggregations；GET .../suggestions；GET .../source-models | agg_unified |
+| 聚合探测与排序配置 | PUT /admin/api/aggregations（probe_* / sort_mode / schedule / template_id）；GET /admin/api/model-groups/probe-configs（兼容） | agg_unified |
+| 探测模板 | GET/POST /admin/api/probe-templates；PUT/DELETE /admin/api/probe-templates/{id} | agg_probe_template |
+| 探测计划与排班表 | GET /admin/api/probe-plan（兼容 .../model-groups/probe-plan）；GET /admin/api/aggregations/rule-units | agg_unified, agg_probe_template, sys_setting(latency_probe) |
 | 单模型启用/禁用 | PATCH /admin/api/upstreams/{id}/models | up_upstream(models) |
 | 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
 | 用量三层统计 | GET /admin/api/usage/summary\|by-model\|by-key\|logs | log_usage |

@@ -211,11 +211,12 @@ class ConfigService:
         self.config.save_probe_config(model, data)
 
     def get_probe_plan(self, probe=None) -> dict:
-        """全局去重探测计划 + 汇总（含探测成本估算）"""
+        """全局去重探测计划 + 汇总（含探测成本估算与排班信息，CH-023）"""
         plan = self.config.collect_probe_plan()
         members = self.config.collect_group_members()
         total_members = sum(len(v) for v in members.values())
         panel = probe.get_panel() if probe is not None else {}
+        entities = self.config.get_aggregations()
         daily = 0
         units = []
         for key, item in plan.items():
@@ -226,14 +227,26 @@ class ConfigService:
             uid = item["upstream"]
             upstream = self.config.get_upstream(uid) or {}
             live = (probe.data.get(key) if probe is not None else None) or {}
+            groups = item["groups"]
+            # 该单元被哪些聚合拉起：取各引用聚合的生效定时段（并集语义已在 probe_plan_active 中体现）
+            schedules = []
+            for gname in groups:
+                sched = self.config.group_probe_settings(gname)["schedule"]
+                if sched and sched not in schedules:
+                    schedules.append(sched)
             units.append({
                 "key": key,
                 "upstream": uid,
                 "upstream_name": upstream.get("name", uid),
                 "model": item["model"],
-                "groups": item["groups"],
+                "groups": groups,
+                "group_kinds": {
+                    g: (entities.get(g, {}).get("kind") or "static") for g in groups
+                },
                 "sources": item["sources"],
                 "interval": item["interval"],
+                "schedule": schedules[0] if len(schedules) == 1 else {"mode": "always"},
+                "schedules": schedules,
                 "latency": live.get("latency"),
                 "status": live.get("status", "unknown"),
                 "last_check": live.get("last_check", 0),
@@ -248,29 +261,171 @@ class ConfigService:
                 "dedup_saved": max(0, total_members - len(plan)),
                 "daily_requests": daily,
                 "global_interval": self.config.probe_config.get("interval_seconds", 120),
+                "aggregation_count": len(entities),
             },
             "units": units,
         }
 
     def list_probe_configs(self) -> dict:
-        """各聚合组的探测配置 + 生效值（供聚合页展示）"""
+        """各聚合的探测配置 + 生效值（供聚合页展示，CH-023 含 rule 聚合）"""
         configs = self.config.get_probe_configs()
         members = self.config.collect_group_members()
+        aggregations = self.config.get_aggregations()
+        templates = {t["id"]: t for t in self.config.get_probe_templates()}
         result = {}
-        for name in set(configs) | set(members):
+        for name in set(configs) | set(members) | set(aggregations):
+            entity = aggregations.get(name) or {}
             settings = self.config.group_probe_settings(name)
+            member_count = (
+                len(self.config.rule_candidate_units())
+                if entity.get("kind") == "rule"
+                else len(members.get(name) or [])
+            )
             result[name] = {
                 "model": name,
+                "kind": entity.get("kind") or "static",
                 "configured": settings["configured"],
                 "enabled": settings["enabled"],
                 "interval_seconds": settings["interval_seconds"],
                 "slow_threshold_seconds": settings["slow_threshold_seconds"],
                 "sort_mode": settings["sort_mode"],
                 "schedule": settings["schedule"],
-                "member_count": len(members.get(name) or []),
-                "raw": configs.get(name, {}),
+                "template_id": settings.get("template_id"),
+                "template_name": settings.get("template_name", ""),
+                "template_exists": settings.get("template_id") in templates
+                if settings.get("template_id") else False,
+                "member_count": member_count,
+                "raw": {
+                    "enabled": bool(entity.get("probe_enabled")) if entity else bool(configs.get(name)),
+                    "interval_seconds": entity.get("interval_seconds")
+                    if entity else (configs.get(name) or {}).get("interval_seconds"),
+                    "slow_threshold_seconds": entity.get("slow_threshold_seconds")
+                    if entity else (configs.get(name) or {}).get("slow_threshold_seconds"),
+                    "sort_mode": (entity.get("sort_mode") if entity else None)
+                    or (configs.get(name) or {}).get("sort_mode") or "stable",
+                    "schedule": (entity.get("schedule") if entity else None)
+                    or (configs.get(name) or {}).get("schedule") or {},
+                    "template_id": entity.get("template_id") if entity else None,
+                },
             }
         return result
+
+    # ---------- 统一聚合实体（CH-023） ----------
+
+    def list_aggregations(self) -> list[dict]:
+        """统一聚合列表：static（固定成员）+ rule（规则匹配），含生效探测参数与模板名
+
+        额外并入「自动发现的同名聚合」（未人工配置、同名模型分布在 >=2 个源），
+        让升级后这类聚合仍在页面上可见可配，configured=false 标识其为自动发现。
+        """
+        entities = self.config.get_aggregations()
+        templates = {t["id"]: t for t in self.config.get_probe_templates()}
+        rule_units = self.config.rule_candidate_units()
+
+        result = []
+        for name, entity in sorted(entities.items(), key=lambda kv: (kv[1].get("kind") != "static", kv[0])):
+            kind = entity.get("kind") or "static"
+            settings = self.config.group_probe_settings(name)
+            item = {
+                "name": name,
+                "kind": kind,
+                "enabled": bool(entity.get("enabled", True)),
+                "members": entity.get("members") or [],
+                "configured": True,
+                "template_id": entity.get("template_id"),
+                "template_name": templates.get(entity.get("template_id"), {}).get("name", ""),
+                "probe": {
+                    "enabled": settings["enabled"],
+                    "interval_seconds": settings["interval_seconds"],
+                    "slow_threshold_seconds": settings["slow_threshold_seconds"],
+                    "sort_mode": settings["sort_mode"],
+                    "schedule": settings["schedule"],
+                    "template_id": settings.get("template_id"),
+                    "template_name": settings.get("template_name", ""),
+                },
+                "self_config": {
+                    "probe_enabled": bool(entity.get("probe_enabled")),
+                    "interval_seconds": entity.get("interval_seconds"),
+                    "slow_threshold_seconds": entity.get("slow_threshold_seconds"),
+                    "sort_mode": entity.get("sort_mode") or "stable",
+                    "schedule": entity.get("schedule") or {},
+                },
+                "remark": entity.get("remark") or "",
+            }
+            if kind == "rule":
+                # rule 聚合没有成员列表：候选由路由规则在运行时匹配，探测对象是候选并集
+                item["member_count"] = len(rule_units)
+                item["rule_names"] = [
+                    r.get("name", "") for r in self.config.rules
+                    if any(c.get("model") for c in r.get("candidates", []))
+                ]
+            else:
+                item["member_count"] = len(item["members"])
+            result.append(item)
+
+        # 自动发现但未落库的同名聚合（configured=false，探测参数取全局/旧表）
+        auto_members = self.config.collect_group_members()
+        for name, members in sorted(auto_members.items()):
+            if name in entities:
+                continue
+            settings = self.config.group_probe_settings(name)
+            result.append({
+                "name": name,
+                "kind": "static",
+                "enabled": True,
+                "members": members,
+                "configured": False,
+                "template_id": None,
+                "template_name": "",
+                "probe": {
+                    "enabled": settings["enabled"],
+                    "interval_seconds": settings["interval_seconds"],
+                    "slow_threshold_seconds": settings["slow_threshold_seconds"],
+                    "sort_mode": settings["sort_mode"],
+                    "schedule": settings["schedule"],
+                    "template_id": None,
+                    "template_name": "",
+                },
+                "self_config": {
+                    "probe_enabled": settings["enabled"],
+                    "interval_seconds": settings["interval_seconds"],
+                    "slow_threshold_seconds": None,
+                    "sort_mode": "stable",
+                    "schedule": {},
+                },
+                "remark": "",
+                "member_count": len(members),
+            })
+        return result
+
+    def save_aggregation(self, name: str, data: dict) -> None:
+        self.config.save_aggregation(name, data)
+
+    def delete_aggregation(self, name: str) -> None:
+        if not self.config.delete_aggregation(name):
+            raise HTTPException(404, f"聚合 {name} 不存在")
+
+    # ---------- 探测模板（CH-023） ----------
+
+    def list_probe_templates(self) -> list[dict]:
+        """模板列表 + 被引用次数与引用方名字"""
+        entities = self.config.get_aggregations()
+        templates = self.config.get_probe_templates()
+        refs: dict[int, list[str]] = {}
+        for name, entity in entities.items():
+            tid = entity.get("template_id")
+            if tid is not None:
+                refs.setdefault(tid, []).append(name)
+        for t in templates:
+            t["ref_count"] = len(refs.get(t["id"], []))
+            t["ref_names"] = sorted(refs.get(t["id"], []))
+        return templates
+
+    def save_probe_template(self, data: dict, template_id: int | None = None) -> int:
+        return self.config.save_probe_template(data, template_id)
+
+    def delete_probe_template(self, template_id: int) -> list[str]:
+        return self.config.delete_probe_template(template_id)
 
     # ---------- 系统参数 ----------
 

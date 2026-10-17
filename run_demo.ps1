@@ -10,7 +10,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Root = $PSScriptRoot
+if (-not $Root) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition }
 $Backend = Join-Path $Root "backend"
 $Python = Join-Path $Backend ".venv\Scripts\python.exe"
 $DemoDb = Join-Path $Backend "demo.db"

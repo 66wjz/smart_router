@@ -127,11 +127,13 @@ async def startup():
     # CH-021：聚合探测配置表 + log_usage.upstream_model 列（幂等补齐）
     try:
         config.sync_probe_config_table()
+        # CH-023：统一聚合实体 + 探测模板（幂等建表 + 旧表迁移）
+        config.sync_unified_tables()
         config.load()
         from app.repositories.usage_repo import UsageRepository
         UsageRepository()._ensure_unit_column()
     except Exception as e:
-        log.warning(f"CH-021 增量结构补齐失败: {e}")
+        log.warning(f"CH-021/CH-023 增量结构补齐失败: {e}")
     usage_buffer.start_worker()
     probe._init_models()
     asyncio.create_task(probe.run_loop(HTTP_CLIENT))

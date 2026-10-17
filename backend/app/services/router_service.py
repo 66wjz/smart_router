@@ -227,6 +227,8 @@ class RouterService:
             return [{"model": target, "upstream": upstream_id, "max_output": None}], "pointer"
 
         if model_name in self.config.aggregated_names:
+            # rule 聚合：候选来自路由规则匹配，仍按 priority + 动态权重排序
+            # （探测结果通过 get_dynamic_weight 参与排序，CH-023 保持不变）
             messages = body.get("messages", [])
             est_tokens = estimate_tokens(messages)
             candidates = get_ordered_candidates(
@@ -262,7 +264,8 @@ class RouterService:
                 })
             if not candidates:
                 self._check_group(resolved[0]["upstream"], key_groups, resolved[0]["model"])  # 抛 403
-            # CH-021：按该组的探测排序策略（stable / latency）重排，全部不可用时回退配置顺序
+            # CH-021/023：static 聚合按该聚合的排序策略（stable / latency）分层重排，
+            # 全部不可用时回退配置顺序
             if len(candidates) > 1 and self.config.is_model_group(model_name):
                 candidates = self.probe.sort_group_candidates(candidates, model_name, self.health)
 
