@@ -53,10 +53,11 @@ def select_model(
 
     for c in candidates:
         m = c["model"]
+        uid = c.get("upstream", "")
         base_w = c.get("weight", 1)
-        dynamic_w = probe.get_dynamic_weight(m, base_w)
+        dynamic_w = probe.get_dynamic_weight(uid, m, base_w)
         prio = c.get("priority", 1)
-        healthy = health.is_available(m)
+        healthy = health.is_available(uid, m)
         if not healthy:
             dynamic_w = 0
 
@@ -182,12 +183,15 @@ def get_ordered_candidates(
                 candidates = rule.get("candidates", [])
                 break
 
-    # 过滤被禁用的上游源候选（禁用后不参与智能路由）
+    # 过滤被禁用的上游源候选（禁用后不参与智能路由）+ 模型级禁用（CH-019）
     enabled_filtered = []
     for c in candidates:
         uid = c.get("upstream", app_config.default_upstream)
-        if app_config.is_upstream_enabled(uid):
-            enabled_filtered.append(c)
+        if not app_config.is_upstream_enabled(uid):
+            continue
+        if not app_config.is_model_enabled(uid, c["model"]):
+            continue
+        enabled_filtered.append(c)
     candidates = enabled_filtered
 
     if allowed_groups is not None:
@@ -201,17 +205,18 @@ def get_ordered_candidates(
     scored = []
     for c in candidates:
         m = c["model"]
+        uid = c.get("upstream", app_config.default_upstream)
         base_w = c.get("weight", 1)
-        dw = probe.get_dynamic_weight(m, base_w)
+        dw = probe.get_dynamic_weight(uid, m, base_w)
         prio = c.get("priority", 1)
-        healthy = health.is_available(m)
+        healthy = health.is_available(uid, m)
         if not healthy:
             dw = 0
         max_ctx = c.get("max_context")
         if max_ctx and estimated_tokens > 0:
             if not check_context_limit(estimated_tokens, max_ctx):
                 dw = 0
-        scored.append((prio, -dw, m, c.get("upstream", app_config.default_upstream), c.get("max_output")))
+        scored.append((prio, -dw, m, uid, c.get("max_output")))
 
     scored.sort(key=lambda x: (x[0], x[1]))
     result = [

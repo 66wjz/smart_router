@@ -3,6 +3,7 @@ import request from '@/utils/request'
 export interface ModelEntry {
   name: string
   protocol?: 'openai' | 'anthropic' | 'responses'
+  enabled?: boolean
 }
 
 export function listUpstreams() {
@@ -32,4 +33,13 @@ export function updateUpstreamModels(id: string, models: ModelEntry[]) {
 export function deleteUpstreamModel(id: string, model: string) {
   // 模型名可能含 /，走 query 参数避免路径匹配失败
   return request.delete(`/admin/api/upstreams/${id}/models`, { params: { model } })
+}
+
+export function toggleUpstreamModel(id: string, model: string, enabled: boolean) {
+  // 模型名可能含 /，走 query 参数避免路径匹配失败（CH-019）
+  return request.patch(`/admin/api/upstreams/${id}/models`, { enabled }, { params: { model } })
+}
+
+export function reorderUpstreamModels(id: string, names: string[]) {
+  return request.put(`/admin/api/upstreams/${id}/models/order`, { names })
 }

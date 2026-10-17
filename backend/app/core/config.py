@@ -12,6 +12,7 @@ from app.core.key_pool import KeyPool
 from app.repositories import (
     AggregatedNameRepository,
     ApiKeyRepository,
+    ModelGroupRepository,
     PointerRepository,
     RuleRepository,
     SettingRepository,
@@ -33,6 +34,7 @@ class AppConfig:
         self._api_keys: list[dict] = []
         self._pointers: list[dict] = []
         self._aggregated_names: list[str] = []
+        self._model_groups: dict[str, dict] = {}
         self._settings: dict = {}
         self._repos = {
             "upstream": UpstreamRepository(),
@@ -41,6 +43,7 @@ class AppConfig:
             "api_key": ApiKeyRepository(),
             "pointer": PointerRepository(),
             "aggregated": AggregatedNameRepository(),
+            "model_group": ModelGroupRepository(),
             "setting": SettingRepository(),
         }
         self.key_pool = KeyPool()
@@ -60,12 +63,14 @@ class AppConfig:
                 self._api_keys = self._repos["api_key"].list_all()
                 self._pointers = self._repos["pointer"].list_all()
                 self._aggregated_names = self._repos["aggregated"].list_names()
+                self._model_groups = self._repos["model_group"].list_all()
                 self._settings = self._repos["setting"].get_all()
             except sqlite3.OperationalError:
                 log.warning("数据库表不存在，配置为空（请先执行 seed.py 初始化）")
                 self._upstreams, self._rules = [], []
                 self._api_keys, self._pointers = [], []
                 self._aggregated_names, self._settings = [], {}
+                self._model_groups = {}
             self._load_upstream_keys()
             log.info(f"配置已加载: {len(self._upstreams)} 上游源, {len(self._rules)} 规则, "
                      f"{len(self._api_keys)} 密钥, {len(self._pointers)} 别名")
@@ -213,6 +218,20 @@ class AppConfig:
                 return m["protocol"]
         return upstream.get("format", "openai")
 
+    def is_model_enabled(self, upstream_id: str, model: str) -> bool:
+        """上游源内单个模型是否启用（CH-019：models 条目缺省 enabled=1）"""
+        upstream = self.get_upstream(upstream_id)
+        if not upstream:
+            return False
+        for m in upstream.get("models") or []:
+            if isinstance(m, dict) and m.get("name") == model:
+                return bool(m.get("enabled", True))
+        return True
+
+    def auto_same_name_enabled(self) -> bool:
+        """同名模型自动聚合开关（CH-019，sys_setting.auto_same_name_aggregate 默认开）"""
+        return bool(self._settings.get("auto_same_name_aggregate", True))
+
     def get_upstream_keys(self, upstream_id: str) -> list[str]:
         """获取上游源的启用 Key 列表（Key 池）"""
         return list(self._upstream_keys.get(upstream_id, []))
@@ -266,19 +285,93 @@ class AppConfig:
         return {}
 
     def find_model_upstream(self, model_name: str) -> str:
-        """查找模型对应的 upstream_id：路由规则候选 → 上游已配置模型（CH-015）→ 默认源"""
+        """查找模型对应的 upstream_id：路由规则候选 → 上游已配置模型（CH-015，跳过禁用模型 CH-019）→ 默认源"""
+        uid = self.collect_model_upstreams(model_name, limit=1)
+        if uid:
+            return uid[0]
+        return self.default_upstream
+
+    def collect_model_upstreams(self, model_name: str, limit: int | None = None) -> list[str]:
+        """返回模型可用的全部 upstream_id（按 upstream 展示顺序，CH-019 同名自动聚合的候选来源）
+        过滤：上游禁用 / 模型级禁用；规则候选优先于已配置模型列表
+        CH-019 二期：若该模型存在人工聚合配置，以配置的勾选与顺序为准"""
+        group = self._model_groups.get(model_name)
+        if group is not None:
+            if not group.get("enabled", True):
+                # 关掉同名聚合 → 退化为单源直连（取配置里的第一个可用源）
+                for item in group.get("upstreams", []):
+                    uid = item.get("upstream", "")
+                    if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
+                        return [uid]
+                return []
+            result: list[str] = []
+            for item in group.get("upstreams", []):
+                uid = item.get("upstream", "")
+                if not uid or uid in result:
+                    continue
+                if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
+                    result.append(uid)
+                    if limit and len(result) >= limit:
+                        return result
+            return result
+
+        matched: list[str] = []
         for rule in self._rules:
             for c in rule.get("candidates", []):
                 if c.get("model") == model_name:
-                    return c.get("upstream", self.default_upstream)
+                    uid = c.get("upstream", self.default_upstream)
+                    if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
+                        matched.append(uid)
+                        if limit and len(matched) >= limit:
+                            return matched
+        for u in self._upstreams:
+            uid = u.get("upstream_id", "")
+            if uid in matched:
+                continue
+            if not self.is_upstream_enabled(uid):
+                continue
+            for m in u.get("models") or []:
+                if isinstance(m, dict) and m.get("name") == model_name:
+                    if self.is_model_enabled(uid, model_name):
+                        matched.append(uid)
+                        if limit and len(matched) >= limit:
+                            return matched
+                    break
+        return matched
+
+    # ============================================================
+    # 同名模型聚合组（CH-019 二期：可查看/可编辑/可控）
+    # ============================================================
+
+    def get_model_groups(self) -> dict[str, dict]:
+        """人工配置的同名聚合组 {model: {upstreams, enabled}}"""
+        with self._lock:
+            return copy.deepcopy(self._model_groups)
+
+    def save_model_group(self, model: str, upstreams: list[dict], enabled: bool = True) -> None:
+        """保存单个模型的聚合配置并热加载"""
+        self._repos["model_group"].upsert(model, upstreams, enabled)
+        with self._lock:
+            self._model_groups = self._repos["model_group"].list_all()
+
+    def delete_model_group(self, model: str) -> None:
+        """删除人工配置 → 该模型回到自动发现"""
+        self._repos["model_group"].delete(model)
+        with self._lock:
+            self._model_groups = self._repos["model_group"].list_all()
+
+    def discover_model_sources(self, model_name: str) -> list[str]:
+        """自动发现同名来源（忽略人工配置），供聚合页展示"自动发现"基线"""
+        found: list[str] = []
         for u in self._upstreams:
             uid = u.get("upstream_id", "")
             if not self.is_upstream_enabled(uid):
                 continue
             for m in u.get("models") or []:
                 if isinstance(m, dict) and m.get("name") == model_name:
-                    return uid
-        return self.default_upstream
+                    found.append(uid)
+                    break
+        return found
 
     # ============================================================
     # API Key 校验

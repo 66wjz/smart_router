@@ -14,10 +14,12 @@
     "element-plus": "^2.9.1",
     "lucide-vue-next": "^0.577.0",
     "pinia": "^2.3.0",
+    "sortablejs": "^1.15.7",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@types/sortablejs": "^1.15.9",
     "@vitejs/plugin-vue": "^5.2.1",
     "typescript": "~5.6.2",
     "vite": "^6.0.5",

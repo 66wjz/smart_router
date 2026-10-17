@@ -20,14 +20,16 @@ class UpstreamRepository(BaseRepository):
         if not isinstance(raw, list):
             return []
         result = []
-        for item in raw:
+        for idx, item in enumerate(raw):
             if isinstance(item, str) and item:
-                result.append({"name": item})
+                result.append({"name": item, "enabled": 1, "order": idx})
             elif isinstance(item, dict) and item.get("name"):
                 entry = {"name": str(item["name"])}
                 protocol = item.get("protocol")
                 if protocol:
                     entry["protocol"] = str(protocol)
+                entry["enabled"] = 1 if item.get("enabled", True) else 0
+                entry["order"] = item.get("order", idx)
                 result.append(entry)
         return result
 

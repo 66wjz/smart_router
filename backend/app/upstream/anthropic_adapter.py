@@ -574,7 +574,7 @@ async def try_non_stream_anthropic(
     base_url = upstream.get("base_url", "").rstrip("/")
     keys = app_config.get_upstream_keys(upstream_id)
     if not base_url or not keys:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     modified = copy.deepcopy(body)
@@ -586,7 +586,7 @@ async def try_non_stream_anthropic(
     anthropic_body = convert_request_openai_to_anthropic(modified)
     url = _build_endpoint(base_url, "/v1/messages")
     if not url:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     rl = _RetryLoop(app_config, upstream_id, model, keys)
@@ -641,7 +641,7 @@ async def try_non_stream_anthropic(
         if resp.status_code == 200:
             await resp.aclose()
             app_config.key_pool.record_success(upstream_id, api_key)
-            health.record_success(model)
+            health.record_success(upstream_id, model)
             openai_resp = convert_response_anthropic_to_openai(json.loads(raw), model)
             return JSONResponse(status_code=200, content=openai_resp, headers=rl.response_headers())
         await resp.aclose()
@@ -655,7 +655,7 @@ async def try_non_stream_anthropic(
             rl.on_failure(api_key)
             rl.log_retry(f"HTTP {resp.status_code}")
             continue
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         log.warning(f"模型 {model.split('/')[-1]} (Anthropic) 返回错误: HTTP {resp.status_code}")
         return None
     return None
@@ -678,7 +678,7 @@ async def try_stream_anthropic(
     base_url = upstream.get("base_url", "").rstrip("/")
     keys = app_config.get_upstream_keys(upstream_id)
     if not base_url or not keys:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     modified = copy.deepcopy(body)
@@ -691,7 +691,7 @@ async def try_stream_anthropic(
     anthropic_body["stream"] = True
     url = _build_endpoint(base_url, "/v1/messages")
     if not url:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     rl = _RetryLoop(app_config, upstream_id, model, keys)
@@ -730,7 +730,7 @@ async def try_stream_anthropic(
                 rl.on_failure(api_key)
                 rl.log_retry(f"流式 HTTP {resp.status_code}（首字节前）")
                 continue
-            health.record_fail(model)
+            health.record_fail(upstream_id, model)
             log.warning(f"模型 {model.split('/')[-1]} (Anthropic) 流式返回错误: HTTP {resp.status_code}")
             return None
 
@@ -755,7 +755,7 @@ async def try_stream_anthropic(
             continue
 
         app_config.key_pool.record_success(upstream_id, api_key)
-        health.record_success(model)
+        health.record_success(upstream_id, model)
         first_chunk = convert_anthropic_sse_line_to_openai(first_line, model)
 
         async def generate():
@@ -770,7 +770,7 @@ async def try_stream_anthropic(
                         yield converted
             except Exception as e:
                 log.error(f"Anthropic 流式传输中断: {model.split('/')[-1]} {e}")
-                health.record_fail(model)
+                health.record_fail(upstream_id, model)
             finally:
                 try:
                     await resp.aclose()

@@ -10,6 +10,7 @@ ALLOWED_MODEL_PROTOCOLS = {"openai", "anthropic", "responses"}
 class ModelEntry(BaseModel):
     name: str
     protocol: str | None = None
+    enabled: bool = True
 
     @field_validator("protocol")
     @classmethod
@@ -54,3 +55,13 @@ class UpstreamTestRequest(BaseModel):
 
 class UpstreamModelsRequest(BaseModel):
     models: list[ModelEntry]
+
+
+class ModelToggleRequest(BaseModel):
+    """单模型启停（CH-019；模型名走 query 参数，避免路径匹配含 / 的模型名）"""
+    enabled: bool
+
+
+class ModelOrderRequest(BaseModel):
+    """整体重排模型顺序（CH-019，names 为重排后的完整有序名单）"""
+    names: list[str]

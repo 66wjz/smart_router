@@ -60,7 +60,7 @@
             </div>
           </div>
 
-          <div v-if="modelsByUpstream[u.id] && modelsByUpstream[u.id].length" class="model-list">
+          <div v-if="modelsByUpstream[u.id] && modelsByUpstream[u.id].length" class="model-list" :data-sortable-upstream="u.id">
             <div class="model-batch-bar">
               <el-checkbox :model-value="allSelected(u)" @change="toggleSelectAllModels(u)">全选</el-checkbox>
               <span class="batch-count">已选 {{ selectedModelCount(u) }} 个</span>
@@ -73,9 +73,24 @@
                 </BaseButton>
               </div>
             </div>
-            <div v-for="m in visibleModels(u)" :key="m.name" class="model-row">
+            <div
+              v-for="m in visibleModels(u)"
+              :key="m.name"
+              class="model-row"
+              :class="{ 'model-disabled': m.enabled === false }"
+              :data-model="m.name"
+            >
+              <span
+                class="drag-handle"
+                role="button"
+                tabindex="0"
+                aria-label="拖动调整模型顺序"
+                :class="{ 'is-disabled': modelExpanded[u.id] === false && (modelsByUpstream[u.id] || []).length > COLLAPSE_THRESHOLD }"
+                :title="(modelsByUpstream[u.id] || []).length > COLLAPSE_THRESHOLD && !modelExpanded[u.id] ? '展开全部后可拖拽排序' : '拖动调整顺序'"
+              >⠿</span>
               <el-checkbox v-model="modelSelected[u.id][m.name]" :disabled="testingAll[u.id]" />
               <code class="model-name">{{ m.name }}</code>
+              <el-tag v-if="m.enabled === false" type="info" size="small">已禁用</el-tag>
               <el-select
                 :model-value="m.protocol || 'inherit'"
                 size="small"
@@ -101,6 +116,14 @@
                 {{ isTesting(u, m.name) ? '测试中...' : (modelState(u, m.name)?.status === 'ok' ? '再测' : '测试') }}
               </BaseButton>
               <BaseButton variant="danger" size="sm" :disabled="testingAll[u.id]" @click="removeModel(u, m.name)">删除</BaseButton>
+              <div class="model-row-right">
+                <el-switch
+                  :model-value="m.enabled !== false"
+                  size="small"
+                  :disabled="testingAll[u.id] || togglingModels[`${u.id}:${m.name}`]"
+                  @change="(val: boolean | string | number) => handleToggleModel(u, m.name, Boolean(val))"
+                />
+              </div>
             </div>
             <div v-if="(modelsByUpstream[u.id] || []).length > COLLAPSE_THRESHOLD" class="model-expand-bar">
               <BaseButton variant="ghost" size="sm" @click="toggleExpand(u)">
@@ -277,14 +300,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref } from 'vue'
+import Sortable from 'sortablejs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import { addUpstream, deleteUpstream, deleteUpstreamModel, listUpstreams, testUpstreamModel, updateUpstream, updateUpstreamModels } from '@/api/upstreams'
+import { addUpstream, deleteUpstream, deleteUpstreamModel, listUpstreams, reorderUpstreamModels, testUpstreamModel, toggleUpstreamModel, updateUpstream, updateUpstreamModels } from '@/api/upstreams'
 import type { ModelEntry } from '@/api/upstreams'
 import { fetchUpstreamModels } from '@/api/aggregated'
 import { reloadConfig } from '@/api/common'
@@ -360,6 +384,7 @@ async function load() {
   } finally {
     loading.value = false
   }
+  initAllSortables()
 }
 
 function openAdd() {
@@ -511,6 +536,74 @@ async function setModelProtocol(u: any, modelName: string, protocol: string) {
   }
 }
 
+// ---------- 单模型启用/禁用（CH-019） ----------
+
+const togglingModels = reactive<Record<string, boolean>>({})
+
+async function handleToggleModel(u: any, modelName: string, enabled: boolean) {
+  const k = `${u.id}:${modelName}`
+  togglingModels[k] = true
+  try {
+    await toggleUpstreamModel(u.id, modelName, enabled)
+    const list = modelsByUpstream[u.id] || []
+    const idx = list.findIndex((e) => e.name === modelName)
+    if (idx >= 0) modelsByUpstream[u.id][idx] = { ...list[idx], enabled }
+    ElMessage.success(enabled ? `模型「${modelName}」已启用` : `模型「${modelName}」已禁用（不出现在 /v1/models，不参与路由与探测）`)
+    await reloadConfig()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
+  } finally {
+    togglingModels[k] = false
+  }
+}
+
+// ---------- 模型拖拽排序（CH-019 二期：替代上移/下移按钮） ----------
+
+const sortables: Record<string, Sortable> = {}
+
+function initModelSortable(u: any) {
+  const el = document.querySelector(`[data-sortable-upstream="${u.id}"]`) as HTMLElement | null
+  if (!el) return
+  sortables[u.id]?.destroy()
+  sortables[u.id] = Sortable.create(el, {
+    handle: '.drag-handle',
+    animation: 150,
+    ghostClass: 'drag-ghost',
+    // 折叠状态下只显示前 N 行，拖拽会打乱全量顺序 → 折叠时禁用
+    disabled: (modelsByUpstream[u.id] || []).length > COLLAPSE_THRESHOLD && !modelExpanded[u.id],
+    onEnd: async (evt) => {
+      const el = evt.from as HTMLElement
+      const domOrder = Array.from(el.querySelectorAll('.model-row'))
+        .map((n) => (n as HTMLElement).dataset.model || '')
+        .filter(Boolean)
+      const all = [...(modelsByUpstream[u.id] || [])]
+      if (domOrder.length !== all.length) {
+        // 折叠态下可见行少于全量行 → 不落库，交给下次展开后再拖
+        await load()
+        return
+      }
+      const byName = new Map(all.map((e) => [e.name, e]))
+      const finalList = domOrder.map((n) => byName.get(n)).filter(Boolean) as ModelEntry[]
+      // 先同步本地数据，避免 Vue 用旧数组回写 DOM
+      modelsByUpstream[u.id] = finalList
+      try {
+        await reorderUpstreamModels(u.id, finalList.map((e) => e.name))
+        await reloadConfig()
+        ElMessage.success('模型顺序已保存')
+      } catch (e: any) {
+        ElMessage.error(e?.response?.data?.detail || '排序失败')
+        await load()
+      }
+    },
+  })
+}
+
+function initAllSortables() {
+  nextTick(() => {
+    upstreams.value.forEach((u: any) => initModelSortable(u))
+  })
+}
+
 // ---------- 列表折叠 ----------
 
 function visibleModels(u: any): ModelEntry[] {
@@ -523,6 +616,8 @@ function visibleModels(u: any): ModelEntry[] {
 
 function toggleExpand(u: any) {
   modelExpanded[u.id] = !modelExpanded[u.id]
+  // 折叠/展开会改变渲染行数，重建 Sortable 以刷新 disabled 状态
+  nextTick(() => initModelSortable(u))
 }
 
 // ---------- 全量 / 批量测试 ----------
@@ -877,6 +972,33 @@ onMounted(load)
 }
 .model-row:hover {
   background: var(--bg-hover);
+}
+.model-row.model-disabled .model-name {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+.model-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.drag-handle {
+  cursor: grab;
+  color: var(--text-tertiary);
+  font-size: 1rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.drag-handle.is-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.drag-ghost {
+  opacity: 0.4;
 }
 .model-name {
   font-family: var(--font-mono, ui-monospace, monospace);

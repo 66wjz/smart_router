@@ -1,10 +1,12 @@
 """
 路由服务 - 客户端请求调度的核心逻辑
 从 v4 router.py 迁移：鉴权中间件之外的路由/转发/重试逻辑
+CH-019：direct 同名多候选自动聚合 + 三层用量采集（单点埋点）
 """
 
-import copy
+import json
 import logging
+import time
 
 import httpx
 from fastapi import HTTPException
@@ -15,6 +17,12 @@ from app.core.context import estimate_tokens, has_image
 from app.core.health import ModelHealth
 from app.core.probe import LatencyProbe
 from app.core.router_engine import get_ordered_candidates
+from app.core.usage import (
+    UsageBuffer,
+    current_api_key_id,
+    current_api_key_name,
+    estimate_tokens_by_chars,
+)
 from app.upstream import (
     try_non_stream,
     try_non_stream_anthropic,
@@ -27,13 +35,174 @@ from app.upstream import (
 log = logging.getLogger("router")
 
 
+class _UsageTracker:
+    """单次请求的用量采集器：计时 + 流式 usage 解析 + 估算降级 + 落缓冲"""
+
+    def __init__(self, cfg: AppConfig, model: str, protocol: str, is_stream: bool,
+                 request_body: dict):
+        self.cfg = cfg
+        self.model = model
+        self.protocol = protocol
+        self.is_stream = is_stream
+        self.request_body = request_body
+        self.t0 = time.time()
+        self.first_token_ms: int | None = None
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.estimated = False
+        self.usage_seen = False
+        self.injected_usage = False  # True=中转站主动注入 stream_options（末 chunk 需剥离）
+        # 流式输出文本累计（估算降级用）
+        self._stream_text_len = 0
+
+    def note_first_token(self) -> None:
+        if self.first_token_ms is None:
+            self.first_token_ms = int((time.time() - self.t0) * 1000)
+
+    def feed_chunk(self, line: str) -> None:
+        """流式：累计输出文本长度 + 解析 usage（带 usage 的末 chunk 由调用方剥离）"""
+        self.note_first_token()
+        if not line.startswith("data:"):
+            return
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            return
+        try:
+            data = json.loads(payload)
+        except Exception:
+            return
+        usage = data.get("usage")
+        if isinstance(usage, dict) and usage:
+            pt = usage.get("prompt_tokens", 0) or 0
+            ct = usage.get("completion_tokens", 0) or 0
+            if pt or ct:
+                self.prompt_tokens = pt
+                self.completion_tokens = ct
+                self.total_tokens = usage.get("total_tokens", pt + ct) or (pt + ct)
+                self.usage_seen = True
+        choices = data.get("choices") or []
+        if choices:
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str):
+                self._stream_text_len += len(content)
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if isinstance(reasoning, str):
+                self._stream_text_len += len(reasoning)
+
+    def finish_success_non_stream(self, data: dict) -> None:
+        """非流式成功：从响应 JSON 取 usage，缺失时估算，并落库"""
+        usage = data.get("usage") or {}
+        pt = usage.get("prompt_tokens", 0) or 0
+        ct = usage.get("completion_tokens", 0) or 0
+        if pt or ct:
+            self.prompt_tokens = pt
+            self.completion_tokens = ct
+            self.total_tokens = usage.get("total_tokens", pt + ct) or (pt + ct)
+            self.usage_seen = True
+        else:
+            self._estimate()
+            self.completion_tokens = self._response_text_len(data)
+            self.total_tokens = self.prompt_tokens + self.completion_tokens
+        self._log("success", 200, None)
+
+    def _response_text_len(self, data: dict) -> int:
+        """非流式响应文本 → 估算 completion tokens（上游未返回 usage 时）"""
+        try:
+            choices = data.get("choices") or []
+            if not choices:
+                return 0
+            message = choices[0].get("message") or {}
+            text = message.get("content") or ""
+            if not isinstance(text, str):
+                text = ""
+            reasoning = message.get("reasoning") or ""
+            if not isinstance(reasoning, str):
+                reasoning = ""
+            return estimate_tokens_by_chars(text + reasoning)
+        except Exception:
+            return 0
+
+    def finish_error(self, error_msg: str, http_status: int | None) -> None:
+        """失败请求也记（成功率才真实），tokens 记已知的估算 prompt"""
+        self._estimate_prompt_only()
+        self._log("error", http_status, error_msg)
+
+    def finalize_stream(self) -> None:
+        """流式结束：无上游 usage 时按输出字符估算 completion"""
+        if not self.usage_seen:
+            self.estimated = True
+            if not self.prompt_tokens:
+                self._estimate_prompt_only()
+            self.completion_tokens = estimate_tokens_by_chars("x" * self._stream_text_len)
+            self.total_tokens = self.prompt_tokens + self.completion_tokens
+        self._log("success", 200, None)
+
+    def _estimate(self) -> None:
+        self.estimated = True
+        prompt_chars = self._request_text_len()
+        self.prompt_tokens = estimate_tokens_by_chars("x" * prompt_chars)
+        self.total_tokens = self.prompt_tokens
+
+    def _estimate_prompt_only(self) -> None:
+        if not self.prompt_tokens:
+            self.estimated = True
+            self.prompt_tokens = estimate_tokens_by_chars("x" * self._request_text_len())
+            self.total_tokens = self.prompt_tokens
+
+    def _request_text_len(self) -> int:
+        total = 0
+        for msg in self.request_body.get("messages", []):
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        total += len(part.get("text", ""))
+        return total
+
+    def _log(self, status: str, http_status: int | None, error_msg: str | None) -> None:
+        buffer: UsageBuffer | None = getattr(self.cfg, "_usage_buffer", None)
+        if buffer is None:
+            return
+        buffer.record({
+            "ts": time.time(),
+            "api_key_id": current_api_key_id.get(),
+            "api_key_name": current_api_key_name.get(),
+            "upstream_id": getattr(self, "upstream_id", None),
+            "upstream_name": getattr(self, "upstream_name", None),
+            "model": self.model,
+            "protocol": self.protocol,
+            "stream": self.is_stream,
+            "status": status,
+            "http_status": http_status,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "estimated": self.estimated,
+            "duration_ms": int((time.time() - self.t0) * 1000),
+            "first_token_ms": self.first_token_ms,
+            "error_msg": error_msg,
+        })
+
+    # 供 _forward 成功后补记命中的 upstream
+    def set_hit_upstream(self, upstream_id: str) -> None:
+        self.upstream_id = upstream_id
+        upstream = self.cfg.get_upstream(upstream_id) or {}
+        self.upstream_name = upstream.get("name", upstream_id)
+
+
 class RouterService:
     def __init__(self, config: AppConfig, probe: LatencyProbe, health: ModelHealth,
-                 http_client: httpx.AsyncClient):
+                 http_client: httpx.AsyncClient, usage_buffer: UsageBuffer | None = None):
         self.config = config
         self.probe = probe
         self.health = health
         self.http_client = http_client
+        self.config._usage_buffer = usage_buffer
+        self.usage_buffer = usage_buffer
 
     # ------------------------------------------------------------
     # 模型路由决策（返回候选列表）
@@ -43,7 +212,7 @@ class RouterService:
                             key_groups: set[str] | None) -> tuple[list[dict], str]:
         """
         识别模型名，返回 (候选列表, 路由模式描述)。
-        模式：pointer（别名直接转发）/ aggregated（聚合路由）/ direct（直接透传）
+        模式：pointer（别名直接转发）/ aggregated（聚合路由）/ direct（直接透传，CH-019 支持同名多候选）
         """
         pointer = self.config.get_model_pointer(model_name)
         if pointer:
@@ -66,12 +235,26 @@ class RouterService:
                 log.info(f"路由: {model_name} → 候选 [{c_str}]{ctx_info}")
             return candidates, "aggregated"
 
-        # 直接请求特定模型名
-        upstream_id = self.config.find_model_upstream(model_name)
-        self._check_group(upstream_id, key_groups, model_name)
-        candidates = [{"model": model_name, "upstream": upstream_id, "max_output": None}]
+        # 直接请求特定模型名（CH-019：同名模型自动聚合为多候选，按 upstream 顺序降级）
+        upstream_ids = self.config.collect_model_upstreams(model_name)
+        if not upstream_ids:
+            # 全部命中源被禁用/禁模型时，回退旧逻辑拿 upstream_id 用于报错信息
+            upstream_id = self.config.find_model_upstream(model_name)
+            self._check_group(upstream_id, key_groups, model_name)
+            candidates = []
+        else:
+            candidates = []
+            for uid in upstream_ids:
+                try:
+                    self._check_group(uid, key_groups, model_name)
+                except HTTPException:
+                    continue  # 该源无分组权限，跳过
+                candidates.append({"model": model_name, "upstream": uid, "max_output": None})
+            if not candidates:
+                self._check_group(upstream_ids[0], key_groups, model_name)  # 抛 403
+
         if self.config.log_routing:
-            log.info(f"直接转发: {model_name} → upstream={upstream_id}")
+            log.info(f"直接转发: {model_name} → 候选 {len(candidates)} 个源 [{', '.join(c['upstream'] for c in candidates)}]")
         return candidates, "direct"
 
     def _check_group(self, upstream_id: str, key_groups: set[str] | None, model: str) -> None:
@@ -94,7 +277,8 @@ class RouterService:
 
     async def _forward(self, candidates: list[dict], body: dict, is_stream: bool,
                        max_attempts: int, response_timeout: float,
-                       first_chunk_timeout: float) -> JSONResponse | StreamingResponse:
+                       first_chunk_timeout: float, tracker: _UsageTracker | None = None,
+                       protocol: str = "chat") -> JSONResponse | StreamingResponse:
         """按候选顺序转发，失败自动换下一个"""
         tried = []
         for i in range(max_attempts):
@@ -102,7 +286,8 @@ class RouterService:
             model = cand["model"]
             upstream_id = cand.get("upstream", self.config.default_upstream)
             model_max_output = cand.get("max_output")
-            tried.append(model)
+            # 同名多源时仅模型名会重复，带上源标识才看得出试过哪些
+            tried.append(f"{model}@{upstream_id}")
 
             if i > 0 and self.config.log_routing:
                 log.info(f"重试({i+1}/{max_attempts}): "
@@ -132,19 +317,87 @@ class RouterService:
             if result is not None:
                 if i > 0 and self.config.log_routing:
                     log.info(f"重试成功: {candidates[i-1]['model'].split('/')[-1]} → {model.split('/')[-1]}")
+                if tracker is not None:
+                    tracker.set_hit_upstream(upstream_id)
+                    if is_stream:
+                        result = self._wrap_stream_with_usage(result, tracker, tracker.injected_usage)
+                    else:
+                        result = self._log_non_stream(result, tracker)
                 return result
 
+        if tracker is not None:
+            tracker.set_hit_upstream(candidates[-1].get("upstream", self.config.default_upstream) if candidates else None)
+            tracker.finish_error(f"所有模型均不可用 (尝试了: {', '.join(tried)})", 503)
         raise HTTPException(
             status_code=503,
-            detail=f"所有模型均不可用 (尝试了: {', '.join(m.split('/')[-1] for m in tried)})",
+            detail=f"所有模型均不可用 (尝试了: {', '.join(tried)})",
+        )
+
+    # ------------------------------------------------------------
+    # 用量采集包装
+    # ------------------------------------------------------------
+
+    def _log_non_stream(self, result: JSONResponse, tracker: _UsageTracker) -> JSONResponse:
+        """非流式：解析 usage 后落库并原样返回"""
+        try:
+            data = json.loads(bytes(result.body))
+            tracker.finish_success_non_stream(data)
+        except Exception:
+            pass
+        return result
+
+    def _wrap_stream_with_usage(self, resp: StreamingResponse,
+                                tracker: _UsageTracker, client_wants_usage: bool) -> StreamingResponse:
+        """流式：解析 usage chunk 记账；注入产生的末尾 usage chunk 在客户端未要求时剥离（透传行为与旧版一致）"""
+
+        async def gen_with_usage():
+            try:
+                async for chunk in resp.body_iterator:
+                    text = chunk if isinstance(chunk, str) else chunk.decode("utf-8", "ignore")
+                    out_parts: list[str] = []
+                    for line in text.split("\n"):
+                        stripped_line = line.strip()
+                        if stripped_line.startswith("data:") and '"usage"' in stripped_line:
+                            try:
+                                payload = json.loads(stripped_line[5:].strip())
+                            except Exception:
+                                out_parts.append(line)
+                                continue
+                            if isinstance(payload, dict) and payload.get("usage") \
+                                    and not ((payload.get("choices") or [{}])[0].get("delta")):
+                                # 末尾纯 usage chunk：记账；客户端没要求则剥离
+                                tracker.feed_chunk(stripped_line)
+                                if not client_wants_usage:
+                                    continue
+                                out_parts.append(line)
+                                continue
+                        tracker.feed_chunk(stripped_line)
+                        out_parts.append(line)
+                    # 保留原换行结构（split 后 join），空尾行保持 SSE 分帧
+                    out_text = "\n".join(out_parts)
+                    if out_text:
+                        yield out_text
+            except Exception as e:
+                log.error(f"流式用量解析中断: {e}")
+            finally:
+                try:
+                    tracker.finalize_stream()
+                except Exception:
+                    pass
+
+        return StreamingResponse(
+            gen_with_usage(),
+            media_type="text/event-stream",
+            headers={k: v for k, v in resp.headers.items()},
         )
 
     # ------------------------------------------------------------
     # 对外入口
     # ------------------------------------------------------------
 
-    async def chat_completions(self, body: dict, key_groups: set[str] | None):
-        """POST /v1/chat/completions 主处理"""
+    async def chat_completions(self, body: dict, key_groups: set[str] | None,
+                               protocol: str = "chat"):
+        """POST /v1/chat/completions 主处理（三入站共用，protocol 标识来源协议）"""
         original_model = body.get("model", "")
         is_stream = body.get("stream", False)
 
@@ -157,6 +410,21 @@ class RouterService:
         response_timeout = retry_cfg.get("response_timeout", 12)
         first_chunk_timeout = retry_cfg.get("first_chunk_timeout", 6)
 
-        return await self._forward(
-            candidates, body, is_stream, max_attempts, response_timeout, first_chunk_timeout
-        )
+        tracker: _UsageTracker | None = None
+        if self.usage_buffer is not None:
+            tracker = _UsageTracker(self.config, original_model, protocol, bool(is_stream), body)
+            # openai 兼容直通流式：提前注入 include_usage（适配器透传 body 时生效）
+            if is_stream:
+                final_fmt = self.config.get_model_protocol(
+                    candidates[0].get("upstream", self.config.default_upstream), candidates[0]["model"])
+                if final_fmt == "openai" and not (body.get("stream_options") or {}).get("include_usage"):
+                    body["stream_options"] = {"include_usage": True}
+                    tracker.injected_usage = True
+
+        try:
+            return await self._forward(
+                candidates, body, is_stream, max_attempts, response_timeout, first_chunk_timeout,
+                tracker, protocol,
+            )
+        except HTTPException:
+            raise

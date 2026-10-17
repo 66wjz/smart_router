@@ -102,7 +102,7 @@ async def try_non_stream(
     base_url = upstream.get("base_url", "").rstrip("/") if upstream else ""
     keys = app_config.get_upstream_keys(upstream_id)
     if not base_url or not keys:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     modified = copy.deepcopy(body)
@@ -113,7 +113,7 @@ async def try_non_stream(
 
     url = _build_endpoint(base_url, "/v1/chat/completions")
     if not url:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     rl = _RetryLoop(app_config, upstream_id, model, keys)
@@ -164,7 +164,7 @@ async def try_non_stream(
         if resp.status_code == 200:
             await resp.aclose()
             app_config.key_pool.record_success(upstream_id, api_key)
-            health.record_success(model)
+            health.record_success(upstream_id, model)
             return JSONResponse(status_code=200, content=json.loads(raw), headers=rl.response_headers())
         await resp.aclose()
         if resp.status_code in (401, 403, 429):
@@ -177,7 +177,7 @@ async def try_non_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"HTTP {resp.status_code}")
             continue
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         log.warning(f"模型 {model.split('/')[-1]} 返回错误: HTTP {resp.status_code}")
         return None
     return None
@@ -200,7 +200,7 @@ async def try_stream(
     base_url = upstream.get("base_url", "").rstrip("/")
     keys = app_config.get_upstream_keys(upstream_id)
     if not base_url or not keys:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     modified = copy.deepcopy(body)
@@ -211,7 +211,7 @@ async def try_stream(
 
     url = _build_endpoint(base_url, "/v1/chat/completions")
     if not url:
-        health.record_fail(model)
+        health.record_fail(upstream_id, model)
         return None
 
     rl = _RetryLoop(app_config, upstream_id, model, keys)
@@ -246,7 +246,7 @@ async def try_stream(
                 rl.on_failure(api_key)
                 rl.log_retry(f"流式 HTTP {resp.status_code}（首字节前）")
                 continue
-            health.record_fail(model)
+            health.record_fail(upstream_id, model)
             log.warning(f"模型 {model.split('/')[-1]} 流式返回错误: HTTP {resp.status_code}")
             return None
 
@@ -271,7 +271,7 @@ async def try_stream(
             continue
 
         app_config.key_pool.record_success(upstream_id, api_key)
-        health.record_success(model)
+        health.record_success(upstream_id, model)
 
         async def generate():
             try:
@@ -282,7 +282,7 @@ async def try_stream(
                         yield line + "\n\n"
             except Exception as e:
                 log.error(f"流式传输中断: {model.split('/')[-1]} {e}")
-                health.record_fail(model)
+                health.record_fail(upstream_id, model)
             finally:
                 try:
                     await resp.aclose()

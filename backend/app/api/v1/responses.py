@@ -56,7 +56,7 @@ async def responses(request: Request):
     log.info(f"[/v1/responses] {model} stream={bool(body.get('stream'))} key={getattr(request.state, 'key_name', '')}")
 
     try:
-        resp = await svc.chat_completions(openai_body, key_groups)
+        resp = await svc.chat_completions(openai_body, key_groups, protocol="responses")
     except HTTPException as e:
         return _responses_error(e.status_code, str(e.detail) if e.detail else "上游服务不可用")
 

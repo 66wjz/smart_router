@@ -1,6 +1,6 @@
 """
 延迟探测模块 - 定期给所有候选模型发探测请求，记录实时延迟
-从 v4 core/probe.py 迁移，import 路径改为 app 包结构
+CH-019：探测粒度从纯模型名改为 (upstream_id, model) 二元组，同名模型跨上游源全探测
 """
 
 import asyncio
@@ -17,47 +17,48 @@ log = logging.getLogger("router")
 
 
 class LatencyProbe:
-    """定期探测所有候选模型的延迟"""
+    """定期探测所有候选模型的延迟（按 上游源+模型 隔离）"""
 
     def __init__(self, app_config: "AppConfig"):
         self.config = app_config
-        self.data: dict[str, dict] = {}
+        self.data: dict[str, dict] = {}  # key = f"{upstream_id}:{model}"
         self._running = False
         self._init_models()
 
+    @staticmethod
+    def _key(upstream_id: str, model: str) -> str:
+        return f"{upstream_id}:{model}"
+
     def _init_models(self) -> None:
-        """初始化所有候选模型的状态（跳过 probe_enabled=false 或已禁用上游的模型）"""
+        """初始化所有候选模型的状态（跳过 probe_enabled=false 或已禁用上游的模型；CH-019 跳过模型级禁用）"""
         all_models = self.config.get_all_models()
-        probeable_models = set()
+        probeable: set[str] = set()
         for m in all_models:
-            upstream_id = self.config.find_model_upstream(m)
-            if self.config.is_upstream_probe_enabled(upstream_id) and self.config.is_upstream_enabled(upstream_id):
-                probeable_models.add(m)
+            for upstream_id in self.config.collect_model_upstreams(m):
+                if self.config.is_upstream_probe_enabled(upstream_id):
+                    probeable.add(self._key(upstream_id, m))
 
-        for m in probeable_models:
-            if m not in self.data:
-                self.data[m] = {"latency": None, "status": "unknown", "last_check": 0, "error": None}
-        for m in list(self.data.keys()):
-            if m not in probeable_models:
-                del self.data[m]
+        for k in probeable:
+            if k not in self.data:
+                self.data[k] = {"latency": None, "status": "unknown", "last_check": 0, "error": None}
+        for k in list(self.data.keys()):
+            if k not in probeable:
+                del self.data[k]
 
-    async def probe_one(self, client: httpx.AsyncClient, model: str) -> dict:
-        """探测单个模型（Key 池选 Key；401/403/429/超时/异常换下一个 Key，全部 Key 失败才判 down）"""
+    @staticmethod
+    def _split_key(key: str) -> tuple[str, str]:
+        """拆出 (upstream_id, model)；模型名可能含冒号，只切第一个冒号"""
+        uid, _, model = key.partition(":")
+        return uid, model
+
+    async def probe_one(self, client: httpx.AsyncClient, key: str) -> dict:
+        """探测单个 (upstream, model)（Key 池选 Key；401/403/429/超时/异常换下一个 Key，全部 Key 失败才判 down）"""
         probe_cfg = self.config.probe_config
         timeout = probe_cfg.get("timeout_seconds", 35)
         text = probe_cfg.get("request_text", "Hi")
         max_tokens = probe_cfg.get("max_tokens", 3)
 
-        upstream_id = None
-        for rule in self.config.rules:
-            for c in rule.get("candidates", []):
-                if c.get("model") == model:
-                    upstream_id = c.get("upstream")
-                    break
-            if upstream_id:
-                break
-        if not upstream_id:
-            upstream_id = self.config.default_upstream
+        upstream_id, model = self._split_key(key)
         upstream = self.config.get_upstream(upstream_id) or {}
         base_url = upstream.get("base_url", "").rstrip("/")
         fmt = upstream.get("format", "openai")
@@ -116,19 +117,19 @@ class LatencyProbe:
         return {"latency": None, "status": "unknown", "error": last_error or "no_available_key"}
 
     async def probe_all(self, client: httpx.AsyncClient) -> None:
-        """并行探测所有模型"""
+        """并行探测所有 (upstream, model)"""
         if not self.config.probe_config.get("enabled", True):
             return
         self._init_models()
-        tasks = {m: self.probe_one(client, m) for m in self.data}
+        tasks = {k: self.probe_one(client, k) for k in self.data}
         results = {}
-        for m, coro in tasks.items():
-            results[m] = await coro
+        for k, coro in tasks.items():
+            results[k] = await coro
 
         now = time.time()
-        for model, result in results.items():
-            old = self.data.get(model, {})
-            self.data[model] = {
+        for key, result in results.items():
+            old = self.data.get(key, {})
+            self.data[key] = {
                 "latency": result["latency"],
                 "status": result["status"],
                 "last_check": now,
@@ -141,9 +142,9 @@ class LatencyProbe:
 
             if old_status != new_status:
                 latency_str = f"{new_latency}s" if new_latency else "N/A"
-                log.warning(f"[探测] {model}: {old_status} → {new_status} (延迟={latency_str})")
+                log.warning(f"[探测] {key}: {old_status} → {new_status} (延迟={latency_str})")
             elif new_latency and old_latency and abs(new_latency - old_latency) / max(old_latency, 0.1) > 0.5:
-                log.info(f"[探测] {model}: 延迟变化 {old_latency}s → {new_latency}s")
+                log.info(f"[探测] {key}: 延迟变化 {old_latency}s → {new_latency}s")
 
     async def run_loop(self, client: httpx.AsyncClient) -> None:
         """后台循环探测"""
@@ -162,12 +163,12 @@ class LatencyProbe:
     def stop(self) -> None:
         self._running = False
 
-    def get_dynamic_weight(self, model: str, base_weight: float) -> float:
+    def get_dynamic_weight(self, upstream_id: str, model: str, base_weight: float) -> float:
         """
-        根据实时延迟计算动态权重。
+        根据实时延迟计算动态权重（CH-019：按 upstream+model 查）。
         公式: dynamic_weight = base_weight * (base_latency / model_latency)²
         """
-        info = self.data.get(model)
+        info = self.data.get(self._key(upstream_id, model))
         if not info:
             return base_weight
         if info["status"] == "down":
@@ -188,12 +189,12 @@ class LatencyProbe:
         return round(dynamic, 2)
 
     def get_panel(self) -> dict:
-        """获取延迟面板数据"""
+        """获取延迟面板数据（key 为 upstream_id:model）"""
         return {
-            m: {
+            k: {
                 "latency": f"{d['latency']}s" if d["latency"] is not None else "N/A",
                 "status": d["status"],
                 "error": d["error"],
             }
-            for m, d in self.data.items()
+            for k, d in self.data.items()
         }

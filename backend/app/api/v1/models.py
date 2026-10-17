@@ -25,7 +25,8 @@ async def list_models(request: Request):
             continue
         for m in u.get("models") or []:
             name = m.get("name") if isinstance(m, dict) else str(m)
-            if name:
+            # CH-019：模型级禁用不出现在客户端模型列表
+            if name and cfg.is_model_enabled(uid, name):
                 model_ids.add(name)
 
     data = [

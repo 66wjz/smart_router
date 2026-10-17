@@ -8,6 +8,7 @@ from app.repositories.upstream_key_repo import UpstreamKeyRepository
 from app.repositories.rule_repo import RuleRepository
 from app.repositories.pointer_repo import PointerRepository
 from app.repositories.aggregated_name_repo import AggregatedNameRepository
+from app.repositories.model_group_repo import ModelGroupRepository
 from app.repositories.setting_repo import SettingRepository
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "RuleRepository",
     "PointerRepository",
     "AggregatedNameRepository",
+    "ModelGroupRepository",
     "SettingRepository",
 ]

@@ -94,3 +94,44 @@ CREATE TABLE IF NOT EXISTS sys_setting (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_setting_key ON sys_setting(key);
+
+-- ============================================================
+-- 8. 用量统计表（CH-019）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS log_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,                  -- 请求完成时间 epoch
+    api_key_id INTEGER,                -- 客户端 Key
+    api_key_name TEXT,
+    upstream_id TEXT,                  -- 实际命中的 upstream
+    upstream_name TEXT,
+    model TEXT,                        -- 客户端请求的模型名
+    protocol TEXT DEFAULT 'chat',      -- chat / anthropic / responses
+    stream INTEGER DEFAULT 0,
+    status TEXT,                       -- success / error
+    http_status INTEGER,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    estimated INTEGER DEFAULT 0,       -- 1=估算值
+    duration_ms INTEGER,
+    first_token_ms INTEGER,
+    error_msg TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_usage_ts ON log_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_key_ts ON log_usage(api_key_id, ts);
+CREATE INDEX IF NOT EXISTS idx_usage_model_ts ON log_usage(model, ts);
+
+-- ============================================================
+-- 9. 同名模型聚合组人工配置（CH-019 二期）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agg_model_group (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model TEXT NOT NULL UNIQUE,
+    upstreams TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"upstream":"xxx","weight":1}]，顺序即候选优先级
+    enabled INTEGER NOT NULL DEFAULT 1,     -- 0 = 关闭同名聚合，退化为单源直连
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_model_group_model ON agg_model_group(model);

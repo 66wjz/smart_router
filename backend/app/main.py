@@ -18,6 +18,7 @@ from app.core.config import config
 from app.core.health import ModelHealth
 from app.core.probe import LatencyProbe
 from app.core.security import JWT_SECRET
+from app.core.usage import UsageBuffer, current_api_key_id, current_api_key_name
 from app.services.auth_service import AuthService
 from app.services.config_service import ConfigService
 from app.services.dashboard_service import DashboardService
@@ -39,12 +40,13 @@ health = ModelHealth(
     cooldown_seconds=failover_cfg.get("cooldown_seconds", 120),
 )
 probe = LatencyProbe(config)
+usage_buffer = UsageBuffer(retention_days=int(config._settings.get("usage_retention_days", 30)))
 HTTP_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), verify=False)
 
 # ============================================================
 # FastAPI 应用
 # ============================================================
-app = FastAPI(title="Smart Router", version="5.1.0")
+app = FastAPI(title="Smart Router", version="5.2.0")
 
 # 挂载路由
 app.include_router(v1_router)
@@ -67,14 +69,15 @@ app.state.config = config
 app.state.probe = probe
 app.state.health = health
 app.state.http_client = HTTP_CLIENT
-app.state.router_service = RouterService(config, probe, health, HTTP_CLIENT)
+app.state.usage_buffer = usage_buffer
+app.state.router_service = RouterService(config, probe, health, HTTP_CLIENT, usage_buffer)
 app.state.config_service = ConfigService(config)
 app.state.auth_service = AuthService(config)
 app.state.dashboard_service = DashboardService(config, probe, health)
 
 
 # ============================================================
-# 中间件：客户端 API Key 校验 + 分组注入
+# 中间件：客户端 API Key 校验 + 分组注入 + 用量 Key 贯穿
 # ============================================================
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
@@ -98,6 +101,14 @@ async def require_api_key(request: Request, call_next):
             )
         request.state.key_groups = set(key_entry.get("groups", ["free"]))
         request.state.key_name = key_entry.get("name", "")
+        # CH-019：Key 信息贯穿到转发层（用量归属）
+        api_key_id = None
+        for ak in config.api_keys:
+            if ak.get("key_value") == raw_key:
+                api_key_id = ak.get("id")
+                break
+        current_api_key_id.set(api_key_id)
+        current_api_key_name.set(key_entry.get("name", ""))
     return await call_next(request)
 
 
@@ -106,8 +117,16 @@ async def require_api_key(request: Request, call_next):
 # ============================================================
 @app.on_event("startup")
 async def startup():
+    # 启动即建 log_usage 表（幂等），再启动用量采集后台线程
+    try:
+        from app.core.database import get_conn
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sql", "06_用量统计与自动聚合.sql"), encoding="utf-8") as f:
+            get_conn().executescript(f.read())
+    except Exception as e:
+        log.warning(f"log_usage 表初始化失败（稍后写入时再建）: {e}")
+    usage_buffer.start_worker()
     asyncio.create_task(probe.run_loop(HTTP_CLIENT))
-    log.info(f"Smart Router v5.1.0 启动，监听端口 {config.listen_port}")
+    log.info(f"Smart Router v5.2.0 启动，监听端口 {config.listen_port}")
 
 
 @app.on_event("shutdown")

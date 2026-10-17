@@ -13,6 +13,8 @@ from app.api.admin.api_keys import router as api_keys_router
 from app.api.admin.aggregated import router as aggregated_router
 from app.api.admin.config import router as config_router
 from app.api.admin.groups import router as groups_router
+from app.api.admin.model_groups import router as model_groups_router
+from app.api.admin.usage import router as usage_router
 
 admin_router = APIRouter()
 admin_router.include_router(auth_router)
@@ -24,5 +26,7 @@ admin_router.include_router(api_keys_router)
 admin_router.include_router(aggregated_router)
 admin_router.include_router(config_router)
 admin_router.include_router(groups_router)
+admin_router.include_router(model_groups_router)
+admin_router.include_router(usage_router)
 
 __all__ = ["admin_router"]

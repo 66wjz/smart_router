@@ -149,6 +149,53 @@ class ConfigService:
     def set_aggregated_names(self, names: list[str]) -> None:
         self.config.set_aggregated_names(names)
 
+    # ---------- 同名模型聚合组（CH-019 二期） ----------
+
+    def list_model_groups(self) -> list[dict]:
+        """列出所有同名多源模型：自动发现结果 + 人工配置（若有）
+        只返回分布在 >=2 个源的模型；人工配置过的即使只剩 1 个源也返回（方便用户恢复/关闭）"""
+        configured = self.config.get_model_groups()
+
+        # 模型名 → 自动发现的可用源
+        discovered: dict[str, list[str]] = {}
+        for u in self.config.upstreams:
+            uid = u.get("upstream_id", "")
+            if not self.config.is_upstream_enabled(uid):
+                continue
+            for m in u.get("models") or []:
+                name = m.get("name") if isinstance(m, dict) else str(m)
+                if not name or not self.config.is_model_enabled(uid, name):
+                    continue
+                discovered.setdefault(name, []).append(uid)
+
+        names = set(discovered) | set(configured)
+        groups = []
+        for name in sorted(names):
+            auto_sources = discovered.get(name, [])
+            conf = configured.get(name)
+            if conf is None and len(auto_sources) < 2:
+                continue  # 未人工配置且只有单源 → 不是聚合组，不展示
+            if conf is not None:
+                order = [s["upstream"] for s in conf.get("upstreams", [])]
+                enabled = bool(conf.get("enabled", True))
+            else:
+                order = list(auto_sources)
+                enabled = True
+            groups.append({
+                "model": name,
+                "sources": order,
+                "enabled": enabled,
+                "configured": conf is not None,
+                "auto_sources": auto_sources,
+            })
+        return groups
+
+    def save_model_group(self, model: str, upstreams: list[dict], enabled: bool = True) -> None:
+        self.config.save_model_group(model, upstreams, enabled)
+
+    def delete_model_group(self, model: str) -> None:
+        self.config.delete_model_group(model)
+
     # ---------- 系统参数 ----------
 
     def get_probe_config(self) -> dict:

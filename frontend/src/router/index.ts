@@ -58,6 +58,12 @@ const router = createRouter({
           meta: { title: '聚合模型名', icon: 'Collection' },
         },
         {
+          path: 'usage',
+          name: 'Usage',
+          component: () => import('@/views/Usage.vue'),
+          meta: { title: '用量统计', icon: 'DataAnalysis' },
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('@/views/Settings.vue'),

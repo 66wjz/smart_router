@@ -285,6 +285,100 @@ Header: `Authorization: Bearer <token>`
 - **出参**: `{ "ok": true }`
 - **错误码**: 400 model 参数缺失；404 上游源不存在
 
+### 4.7.3 单模型启用/禁用（CH-019）
+
+- **路径**: `PATCH /admin/api/upstreams/{upstream_id}/models?model={model_name}`
+- **鉴权**: JWT
+- **入参**: `{ "enabled": false }`
+- **行为**: 仅改该模型条目的 `enabled` 标记，保留 `protocol` 等其余字段；禁用后不出现在 `GET /v1/models`、不参与路由与延迟探测
+- **出参**: `{ "ok": true, "model": "...", "enabled": false }`
+- **错误码**: 400 model 参数缺失；404 上游源不存在 / 模型不在该源已配置列表
+
+### 4.7.4 模型顺序重排（CH-019）
+
+- **路径**: `PUT /admin/api/upstreams/{upstream_id}/models/order`
+- **鉴权**: JWT
+- **入参**: `{ "names": ["model-b", "model-a"] }`（重排后的完整有序名单；未出现的模型按原相对顺序追加尾部）
+- **出参**: `{ "ok": true, "models": ["model-b", "model-a"] }`
+- **错误码**: 404 上游源不存在
+
+### 4.24 同名模型聚合组列表（CH-019）
+
+- **路径**: `GET /admin/api/model-groups`（可选 `?model=xxx` 过滤单个）
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{
+  "groups": [
+    {
+      "model": "deepseek-v4-flash",
+      "sources": ["dsh", "trae"],
+      "enabled": true,
+      "configured": false,
+      "auto_sources": ["dsh", "trae"]
+    }
+  ]
+}
+```
+
+- **字段说明**: `sources` 为当前生效顺序；`configured=false` 表示走自动发现；`auto_sources` 为自动发现的全部可用源（用于对比"哪些源没被纳入"）
+- **说明**: 只返回分布在 ≥2 个源的模型；人工配置过的模型即使只剩 1 个源也返回
+
+### 4.25 保存同名模型聚合配置（CH-019）
+
+- **路径**: `PUT /admin/api/model-groups?model={model_name}`
+- **鉴权**: JWT
+- **入参**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| upstreams | array | 是 | `[{upstream, weight}]`，顺序即候选优先级，不可为空 |
+| enabled | bool | 否 | 默认 true；false = 关闭同名聚合，退化为取第一个可用源直连 |
+
+- **出参**: `{ "ok": true, "model": "..." }`
+- **错误码**: 400 model 缺失；404 上游源不存在；422 upstreams 为空
+
+### 4.26 删除同名模型聚合配置（CH-019）
+
+- **路径**: `DELETE /admin/api/model-groups?model={model_name}`
+- **鉴权**: JWT
+- **行为**: 删除人工配置，该模型回到自动发现
+- **出参**: `{ "ok": true, "model": "..." }`
+
+### 4.27 用量汇总（CH-019）
+
+- **路径**: `GET /admin/api/usage/summary?range=today|7d|30d`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{ "total": 128, "success_count": 125, "success_rate": 0.9766, "total_tokens": 456789, "active_keys": 3,
+  "top_errors": [{ "target": "dsh/deepseek-v4-flash", "count": 2 }] }
+```
+
+- **说明**: `success_rate` 在无请求时为 `null`；`top_errors` 取错误数 Top5
+
+### 4.28 用量按模型聚合（CH-019）
+
+- **路径**: `GET /admin/api/usage/by-model?range=today|7d|30d`
+- **出参**: `{ "models": [{ "model", "requests", "success_count", "error_count", "prompt_tokens", "completion_tokens", "total_tokens", "avg_duration_ms", "upstream_count" }] }`（按 total_tokens 降序，最多 200 条）
+
+### 4.29 用量按 Key 聚合（CH-019）
+
+- **路径**: `GET /admin/api/usage/by-key?range=today|7d|30d`
+- **出参**: `{ "keys": [{ "api_key_id", "api_key_name", "requests", "success_count", "error_count", "total_tokens", "avg_duration_ms" }] }`
+
+### 4.30 用量明细（CH-019）
+
+- **路径**: `GET /admin/api/usage/logs?range=today|7d|30d&page=1&size=50&key_id=&model=&status=success|error`
+- **出参**: `{ "total": 128, "page": 1, "size": 50, "items": [ ...log_usage 行... ] }`（按 id 倒序）
+
+### 4.31 手动落库用量缓冲（CH-019，调试用）
+
+- **路径**: `POST /admin/api/usage/flush`
+- **出参**: `{ "ok": true }`
+
 ### 4.6 路由规则列表
 
 - **路径**: `GET /admin/api/rules`
@@ -472,6 +566,11 @@ Header: `Authorization: Bearer <token>`
 | 别名增删改查 | /admin/api/model-pointers | pt_pointer |
 | 延迟与健康状态 | GET /status | （内存状态） |
 | 聚合名管理 | GET/PUT /admin/api/aggregated-names | agg_aggregated_name |
+| 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
+| 同名聚合人工配置 | GET/PUT/DELETE /admin/api/model-groups | agg_model_group |
+| 单模型启用/禁用 | PATCH /admin/api/upstreams/{id}/models | up_upstream(models) |
+| 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
+| 用量三层统计 | GET /admin/api/usage/summary\|by-model\|by-key\|logs | log_usage |
 | 延迟探测参数配置 | GET/PUT /admin/api/config/probe | sys_setting |
 | 重试参数配置 | GET/PUT /admin/api/config/retry | sys_setting |
 | 故障转移参数配置 | GET/PUT /admin/api/config/failover | sys_setting |
@@ -486,3 +585,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-08-10 | CH-012：上游源新增 smart_retry 开关字段；新增 GET/PUT /admin/api/config/smart-retry 全局参数；成功响应新增 X-Served-By / X-Retry-Count 响应头 | AI+用户 |
 | 2026-08-11 | CH-009/010：新增入站端点 POST /v1/messages（Anthropic 格式，兼容 x-api-key 鉴权）与 POST /v1/responses（Responses 格式，Codex 可用）；内部统一 openai chat 中间格式，双向自动转换（含流式），3×3 协议矩阵收齐 | AI+用户 |
 | 2026-08-12 | CH-018：三入站错误统一为各协议标准格式；messages/responses 入站补图片块映射（image/input_image → image_url）；推理模型 reasoning 映射（anthropic thinking / responses reasoning item）；新增 2.3 Responses 契约章节 | AI+用户 |
+| 2026-10-16 | CH-019：新增 4.7.3 单模型启停、4.7.4 模型重排、4.24~4.26 同名聚合组三端点、4.27~4.31 用量四端点+flush；/v1/models 过滤模型级禁用；503 错误信息带 `model@upstream` | AI+用户 |

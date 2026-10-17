@@ -112,6 +112,7 @@ const sidebarGroups = [
   {
     label: '',
     items: [
+      { key: 'usage', label: '用量统计', icon: 'bar-chart', path: '/usage' },
       { key: 'settings', label: '系统设置', icon: 'settings', path: '/settings' },
     ],
   },

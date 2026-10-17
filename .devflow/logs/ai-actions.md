@@ -5,6 +5,15 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-16 - CH-019 部署事故修复（FB-022，A 线）+ CH-019 收口待办登记
+- 背景：另一 AI 会话承接 CH-019（B 线-大），在未完成实施验证的情况下执行了增量部署（test/deploy_ch019_incremental.py）至 Ubuntu 生产，上线即 /v1/chat 全 500
+- 三处部署缺口定位（journalctl traceback + ss + unit 对读）：①上传清单漏 app/upstream/ 三个适配器 → 新 ModelHealth.record_success(upstream_id, model) 签名 vs 旧调用 record_success(model) → 每请求必炸；②迁移步骤写死阿里云旧机 /root/miniconda3/bin/python（Ubuntu 无）→ SQL 06 静默未执行；③前端传至 frontend_dist/ 而 systemd FRONTEND_DIST 指向 frontend/dist 且未 daemon-reload → 生产一直跑旧前端
+- 修复（先备份 /opt/smart-router/backup_app_20261016_195621 + DB 再动手）：本地↔远程 58 个 .py 逐文件 md5 比对精确补传 3 适配器；venv python 绝对路径补跑 SQL 06（幂等通过）；unit 改指 frontend_dist + daemon-reload + 重启
+- 顺手修新代码 bug（铁律 2 定位→铁律 3 单点改）：repositories/usage_repo.py insert_many `with self._lock_cursor_batch(...)` 把 int 当上下文管理器每批必抛 TypeError 假错（数据实际已落库）→ 改 1 行直接 return；本地同步修改（先本地后上传）
+- 运行参数热调整：PUT /admin/api/config/retry → response_timeout 20→60、first_chunk_timeout 8→30（dsh 网关 aggregate/* 聚合入口实测 20~40s，原超时一碰即 503；CH-019 决策点 4 的落地，值按实测取）
+- 验证：chat 非流式×3、流式、/v1/messages（anthropic）、/admin/api/usage/summary、新 dist 前端页面全通；log_usage 正常落库（success 与 error 均记）
+- 遗留待办（CH-019 收尾，用户实测确认后执行）：文档同步（数据库设计 log_usage / API契约+接口文档 4 个 usage 端点与 PATCH/PUT models / 功能清单 / README / 五列矩阵）→ 变更文档归档 → 版本号决策（启动日志已显示 v5.2.0，建议收尾统一）→ git commit（本地 18 改+11 新增未提交）；test/deploy_ch019_incremental.py 内 miniconda 旧路径未修，复用前必改
+
 ### 2026-08-12 - FB-021 项目补齐 V5.2 流程缺口（B 线-小，已归档）
 - 按 skill V5.2 新规则对项目做缺口盘点：无脱敏配置模板、.gitignore 未覆盖密钥/日志/缓存、_changes/README 缺长期台账
 - 补齐：新增 config.example.yaml（脱敏模板，真实 config.yaml 不入库）；.gitignore 对照 skill templates/gitignore.md 增强；_changes/README 补长期台账区

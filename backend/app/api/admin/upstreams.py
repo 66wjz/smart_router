@@ -9,7 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.api.deps import check_auth
-from app.schemas.upstream import UpstreamCreate, UpstreamModelsRequest, UpstreamTestRequest, UpstreamUpdate
+from app.schemas.upstream import (
+    ModelOrderRequest,
+    ModelToggleRequest,
+    UpstreamCreate,
+    UpstreamModelsRequest,
+    UpstreamTestRequest,
+    UpstreamUpdate,
+)
 from app.services.config_service import ConfigService
 from app.upstream import test_non_stream, test_non_stream_anthropic, test_non_stream_responses
 from app.upstream.openai_adapter import _build_endpoint
@@ -101,6 +108,45 @@ async def delete_upstream_model(upstream_id: str, model: str, request: Request, 
     models = [m for m in (upstream.get("models") or []) if m.get("name") != model]
     svc.update_upstream(upstream_id, {"models": models})
     return {"ok": True}
+
+
+@router.patch("/upstreams/{upstream_id}/models")
+async def toggle_upstream_model(upstream_id: str, model: str, req: ModelToggleRequest,
+                                request: Request, _=Depends(check_auth)):
+    """单模型启用/禁用（CH-019）
+    模型名走 query 参数（可能含 /）；仅改 enabled 标记，保留协议覆盖等其余字段"""
+    svc: ConfigService = request.app.state.config_service
+    cfg = request.app.state.config
+    upstream = cfg.get_upstream(upstream_id)
+    if not upstream:
+        raise HTTPException(404, "上游源不存在")
+    if not model:
+        raise HTTPException(400, "model 参数必填")
+    models = upstream.get("models") or []
+    if not any(m.get("name") == model for m in models):
+        raise HTTPException(404, f"模型 {model} 不在该上游源已配置列表")
+    new_models = [{**m, "enabled": req.enabled} if m.get("name") == model else m for m in models]
+    svc.update_upstream(upstream_id, {"models": new_models})
+    return {"ok": True, "model": model, "enabled": req.enabled}
+
+
+@router.put("/upstreams/{upstream_id}/models/order")
+async def reorder_upstream_models(upstream_id: str, req: ModelOrderRequest,
+                                  request: Request, _=Depends(check_auth)):
+    """整体重排模型顺序（CH-019）：names 为重排后的完整有序名单，未出现的模型保持相对顺序追加在尾部"""
+    svc: ConfigService = request.app.state.config_service
+    cfg = request.app.state.config
+    upstream = cfg.get_upstream(upstream_id)
+    if not upstream:
+        raise HTTPException(404, "上游源不存在")
+    current = {m.get("name"): m for m in (upstream.get("models") or [])}
+    ordered: list[dict] = []
+    for name in req.names:
+        if name in current:
+            ordered.append(current.pop(name))
+    ordered.extend(current.values())
+    svc.update_upstream(upstream_id, {"models": ordered})
+    return {"ok": True, "models": [m.get("name") for m in ordered]}
 
 
 @router.post("/upstreams/{upstream_id}/test")
