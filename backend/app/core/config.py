@@ -557,14 +557,26 @@ class AppConfig:
                 add(m["upstream"], m["model"], "group", group_name, settings["interval_seconds"])
 
         # 2) 路由规则候选 + 3) 别名目标（受全局开关注册）
+        #    注意：若规则/别名引用的是聚合名，必须展开成各源的真实模型名，
+        #    否则会产生 "源:聚合名" 这种不存在的探测单元（CH-022 修复）
         if global_enabled:
+            group_members = self.collect_group_members()
             for rule in self._rules:
                 for c in rule.get("candidates", []):
-                    add(c.get("upstream", self.default_upstream), c.get("model", ""), "rule")
+                    model = c.get("model", "")
+                    if model in group_members:
+                        for m in group_members[model]:
+                            add(m["upstream"], m["model"], "rule")
+                    else:
+                        add(c.get("upstream", self.default_upstream), model, "rule")
             for p in self._pointers:
                 target = p.get("target_model", "")
-                for uid in self.collect_model_upstreams(target):
-                    add(uid, target, "pointer")
+                if target in group_members:
+                    for m in group_members[target]:
+                        add(m["upstream"], m["model"], "pointer")
+                else:
+                    for uid in self.collect_model_upstreams(target):
+                        add(uid, target, "pointer")
 
         # 过滤：上游禁用 / 探测禁用 / 模型级禁用
         for key in list(plan.keys()):

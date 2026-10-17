@@ -194,16 +194,54 @@ Header: `Authorization: Bearer <token>`
 
 ```json
 {
-  "upstream_count": 2,
+  "upstream_count": 4,
   "model_count": 12,
-  "model_ok": 10,
+  "probe_unit_count": 7,
+  "model_ok": 5,
   "model_down": 2,
   "rule_count": 3,
   "pointer_count": 3,
   "api_key_count": 3,
-  "health": { "fails": {}, "cooldown": {} }
+  "health": { "fails": {}, "cooldown": {}, "probe_down": {} },
+
+  "usage_today": { "requests": 56, "success_rate": 0.946, "total_tokens": 63800,
+                   "active_keys": 3, "requests_delta": -0.45 },
+  "usage_7d": { "requests": 724, "total_tokens": 771800, "success_rate": 0.981 },
+  "trend": [ { "date": "10-11", "requests": 82, "success_count": 81, "total_tokens": 91600 } ],
+
+  "upstream_usage": [ { "upstream_id": "buddy", "upstream_name": "Buddy 积分池",
+                        "requests": 327, "success_count": 320, "error_count": 7,
+                        "total_tokens": 376600, "share": 0.488,
+                        "probe_ok": 3, "probe_total": 3,
+                        "enabled": true, "smart_retry": true } ],
+
+  "groups": [ { "model": "deepseek-v4-1-flash", "member_count": 3,
+                "members": [ { "upstream": "buddy", "model": "deepseek-v4.1-flash" } ],
+                "configured": true, "probe_enabled": true, "probe_interval": 60,
+                "probe_schedule": "工作日 08:00-23:00", "probe_schedule_mode": "window",
+                "sort_mode": "latency", "requests_7d": 297, "tokens_7d": 268700 } ],
+
+  "attention": [ { "kind": "probe_down", "target": "gemini-2.5-pro@buddy",
+                   "detail": "探测不可用：..." } ],
+
+  "probe_summary": { "enabled": true, "unit_count": 7, "ok": 5, "down": 1, "unknown": 1,
+                     "global_interval": 300, "global_schedule": "全天候", "scheduled_off": 3 }
 }
 ```
+
+**字段说明（CH-022 扩展）**：
+
+| 字段 | 说明 |
+|---|---|
+| `usage_today` / `usage_7d` | 按请求时间 `ts` 聚合（today 以本地自然日 0 点起） |
+| `requests_delta` | 今日 0 点至今 vs 昨日同期 的请求数环比；昨日同期为 0 时返回 `null` |
+| `trend` | 最近 7 个自然日，缺失日期补 0；`date` 格式 `MM-DD` |
+| `upstream_usage` | 按上游源聚合近 7 天，`share` 按 tokens 占比；附探测可用率与实际启用/智能重试状态 |
+| `groups` | 聚合组概览：成员链路 + 探测配置 + 近 7 天用量；`configured=false` 表示自动发现 |
+| `attention` | 待关注项，`kind ∈ {cooldown, probe_down, no_key, stale, disabled_upstream}` |
+| `probe_summary` | 去重探测计划的健康摘要；`scheduled_off` 为当前处于探测时段外的单元数 |
+
+> `usage_*` / `trend` 在 `log_usage` 尚未建立时返回零值，不影响其余字段。
 
 ### 4.3 上游源列表
 

@@ -4,6 +4,10 @@ backend/smart_router.db
 backend/smart_router.db-journal
 backend/smart_router.db-wal
 backend/smart_router.db-shm
+backend/demo.db
+backend/demo.db-journal
+backend/demo.db-wal
+backend/demo.db-shm
 *.sqlite
 *.sqlite3
 test/_sanitize_secrets.py

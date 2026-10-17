@@ -669,8 +669,8 @@ svg:not([width]) {
 }
 
 /* ===== SVG SIZE ENFORCEMENT ===== */
-/* All SVGs default to 14px */
-svg:not(.empty-state svg) {
+/* 图标类 SVG 默认 14px；显式声明尺寸的（如趋势图 .trend-svg）不受影响 */
+svg:not(.empty-state svg):not(.trend-svg):not([data-free-size]) {
   width: 14px !important;
   height: 14px !important;
   max-width: 14px !important;

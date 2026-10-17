@@ -9,7 +9,9 @@ import sqlite3
 import threading
 
 # 数据库文件位于 backend/ 目录下（与 seed.py 保持一致）
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "smart_router.db")
+# CH-022：支持 SMART_ROUTER_DB 覆盖，用于演示环境（demo.db）与生产隔离
+_DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "smart_router.db")
+DB_PATH = os.environ.get("SMART_ROUTER_DB") or _DEFAULT_DB
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None

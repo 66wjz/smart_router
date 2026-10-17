@@ -86,9 +86,16 @@ class UsageRepository(BaseRepository):
 
     @staticmethod
     def _range_clause(range_name: str) -> tuple[str, tuple]:
-        """时间范围 → SQL 条件。today 以本地自然日为界"""
+        """时间范围 → SQL 条件
+
+        CH-022 修复：today 边界必须用请求时间 ts（而非落库时间 created_at）。
+        created_at 是批量 flush 写入时间，用它会导致"今日"把历史数据也算进去
+        （批量导入/补数据时尤其明显）。
+        """
         if range_name == "today":
-            return "created_at >= date('now','localtime')", ()
+            from datetime import datetime
+            start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            return "ts >= ?", (start.timestamp(),)
         if range_name == "7d":
             return "ts >= ?", (__import__("time").time() - 7 * 86400,)
         if range_name == "30d":
@@ -141,6 +148,81 @@ class UsageRepository(BaseRepository):
         for r in rows:
             r["error_count"] = (r.get("requests", 0) or 0) - (r.get("success_count", 0) or 0)
         return rows
+
+    def count_in_period(self, start_ts: float, end_ts: float) -> int:
+        """指定时间区间内的请求数（CH-022：用于"今日 vs 昨日同期"环比）"""
+        row = self.query_one(
+            f"SELECT COUNT(*) AS c FROM {self.TABLE} WHERE ts >= ? AND ts < ?",
+            (start_ts, end_ts),
+        ) or {}
+        return row.get("c", 0) or 0
+
+    def daily_trend(self, days: int = 7) -> list[dict]:
+        """按本地自然日聚合最近 N 天（含今天），无数据的日期补 0（CH-022 仪表盘趋势图）"""
+        from datetime import datetime, timedelta
+
+        start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        rows = self.query(
+            f"SELECT date(ts, 'unixepoch', 'localtime') AS d, "
+            f"COUNT(*) AS requests, "
+            f"SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, "
+            f"COALESCE(SUM(total_tokens), 0) AS total_tokens "
+            f"FROM {self.TABLE} WHERE ts >= ? "
+            f"GROUP BY d ORDER BY d",
+            (start.timestamp(),),
+        )
+        by_day = {r["d"]: r for r in rows}
+        result = []
+        for i in range(days):
+            day = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            r = by_day.get(day) or {}
+            result.append({
+                "date": day[5:],
+                "requests": r.get("requests", 0) or 0,
+                "success_count": r.get("success_count", 0) or 0,
+                "total_tokens": r.get("total_tokens", 0) or 0,
+            })
+        return result
+
+    def by_upstream(self, range_name: str = "7d") -> list[dict]:
+        """按上游源聚合（CH-022 仪表盘贡献占比）"""
+        cond, params = self._range_clause(range_name)
+        rows = self.query(
+            f"SELECT upstream_id, upstream_name, "
+            f"COUNT(*) AS requests, "
+            f"SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, "
+            f"COALESCE(SUM(total_tokens), 0) AS total_tokens "
+            f"FROM {self.TABLE} WHERE {cond} AND upstream_id IS NOT NULL "
+            f"GROUP BY upstream_id, upstream_name ORDER BY total_tokens DESC LIMIT 50",
+            params,
+        )
+        total_tokens = sum((r.get("total_tokens") or 0) for r in rows)
+        for r in rows:
+            r["error_count"] = (r.get("requests") or 0) - (r.get("success_count") or 0)
+            r["share"] = round((r.get("total_tokens") or 0) / total_tokens, 4) if total_tokens else 0
+        return rows
+
+    def by_request_model(self, range_name: str = "7d") -> list[dict]:
+        """按客户端请求的模型名聚合（CH-022 仪表盘聚合组概览）"""
+        cond, params = self._range_clause(range_name)
+        rows = self.query(
+            f"SELECT model, "
+            f"COUNT(*) AS requests, "
+            f"SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, "
+            f"COALESCE(SUM(total_tokens), 0) AS total_tokens "
+            f"FROM {self.TABLE} WHERE {cond} AND model IS NOT NULL "
+            f"GROUP BY model",
+            params,
+        )
+        return [
+            {
+                "model": r["model"],
+                "requests": r.get("requests", 0) or 0,
+                "success_count": r.get("success_count", 0) or 0,
+                "total_tokens": r.get("total_tokens", 0) or 0,
+            }
+            for r in rows
+        ]
 
     def by_key(self, range_name: str = "7d") -> list[dict]:
         cond, params = self._range_clause(range_name)
