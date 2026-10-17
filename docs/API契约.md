@@ -385,6 +385,77 @@ Header: `Authorization: Bearer <token>`
 - **用途**: 「添加异名成员」时下拉选择该源的真实模型名
 - **错误码**: 404 上游源不存在
 
+### 4.26.3 聚合组探测配置列表（CH-021）
+
+- **路径**: `GET /admin/api/model-groups/probe-configs`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{ "configs": {
+    "deepseek-v4-1-flash": {
+      "model": "deepseek-v4-1-flash", "configured": true, "enabled": true,
+      "interval_seconds": 30, "slow_threshold_seconds": 4, "sort_mode": "latency",
+      "schedule": {"mode": "window", "days": [1,2,3,4,5], "windows": [{"start":"08:00","end":"23:00"}]},
+      "member_count": 3,
+      "raw": {"enabled": true, "interval_seconds": 30, "slow_threshold_seconds": 4,
+              "sort_mode": "latency", "schedule": {"..."}}
+    }
+} }
+```
+
+- **说明**: `configured=false` 表示该组无人工探测配置（各字段为全局继承值）；`raw` 为落库原值（用于编辑回显，区分"显式设置"与"继承"）
+
+### 4.26.4 保存聚合组探测配置（CH-021）
+
+- **路径**: `PUT /admin/api/model-groups/probe?model={model_name}`
+- **鉴权**: JWT
+- **入参**:
+
+```json
+{ "enabled": true, "interval_seconds": 30, "slow_threshold_seconds": 4,
+  "sort_mode": "stable|latency",
+  "schedule": {"mode": "always|window", "days": [1,2,3,4,5],
+               "windows": [{"start": "08:00", "end": "23:00"}]} }
+```
+
+- **校验**:
+  - `interval_seconds`：`null` 或 `0` 表示跟随全局；否则 ≥ 10
+  - `slow_threshold_seconds`：`null` 或 `0` 表示跟随全局；否则 ≥ 1
+  - `sort_mode`：`stable` / `latency`
+  - `schedule.mode`：`always` / `window`；窗口 `start` 与 `end` 必须同时存在且不相同（支持跨夜）
+- **出参**: `{ "ok": true, "model": "deepseek-v4-1-flash" }`
+- **错误码**: 400 model 缺失 / 404 聚合组不存在 / 422 参数非法
+
+### 4.26.5 删除聚合组探测配置（CH-021）
+
+- **路径**: `DELETE /admin/api/model-groups/probe?model={model_name}`
+- **鉴权**: JWT
+- **说明**: 删除后该组回到"不探测"，全局探测不受影响
+- **出参**: `{ "ok": true, "model": "..." }`
+
+### 4.26.6 全局探测计划（CH-021）
+
+- **路径**: `GET /admin/api/model-groups/probe-plan`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{ "summary": { "unit_count": 12, "member_refs": 16, "dedup_saved": 4,
+               "daily_requests": 17280, "global_interval": 360 },
+  "units": [
+    { "key": "buddy:deepseek-v4.1-flash", "upstream": "buddy", "upstream_name": "Buddy",
+      "model": "deepseek-v4.1-flash", "groups": ["deepseek-v4-1-flash"], "sources": ["group"],
+      "interval": 60, "latency": 1.2, "status": "ok", "last_check": 1792228899,
+      "stale": false, "active_now": true } ] }
+```
+
+- **说明**:
+  - 探测单元 = `(上游源, 该源真实模型名)`，**全局唯一**；聚合组只引用不拥有
+  - 多组引用同一单元时 `interval` 取最小值；`daily_requests = Σ(86400/interval)`
+  - `active_now=false` 表示当前处于该单元探测时段之外
+  - `stale=true` 表示 `last_check` 超过 `3 × interval` 未更新
+
 ### 4.27 用量汇总（CH-019）
 
 - **路径**: `GET /admin/api/usage/summary?range=today|7d|30d`
@@ -402,6 +473,27 @@ Header: `Authorization: Bearer <token>`
 
 - **路径**: `GET /admin/api/usage/by-model?range=today|7d|30d`
 - **出参**: `{ "models": [{ "model", "requests", "success_count", "error_count", "prompt_tokens", "completion_tokens", "total_tokens", "avg_duration_ms", "upstream_count" }] }`（按 total_tokens 降序，最多 200 条）
+
+### 4.28.1 用量按单元聚合（CH-021）
+
+- **路径**: `GET /admin/api/usage/by-unit?range=today|7d|30d`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{ "units": [
+   { "upstream_id": "buddy", "upstream_name": "Buddy",
+     "upstream_model": "deepseek-v4.1-flash",
+     "requests": 320, "success_count": 318, "error_count": 2, "request_models": 3,
+     "prompt_tokens": 900000, "completion_tokens": 350000, "total_tokens": 1250000,
+     "avg_duration_ms": 2100, "last_ts": 1792228899 } ] }
+```
+
+- **说明**:
+  - 维度是「上游源 × 上游真实模型名」，用于号池/积分消耗核算
+  - `upstream_model` 取 `COALESCE(upstream_model, model)`：CH-021 之前的老数据没有真实模型名，回退用请求名，避免整行丢失
+  - `request_models` = 该单元被多少个不同的客户端请求名命中（异名聚合的关联度指标）
+  - 按 total_tokens 降序，最多 500 条
 
 ### 4.29 用量按 Key 聚合（CH-019）
 
@@ -608,9 +700,11 @@ Header: `Authorization: Bearer <token>`
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
 | 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_model_group |
 | 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups；GET .../suggestions；GET .../source-models | agg_model_group |
+| 聚合组独立探测 | GET/PUT/DELETE /admin/api/model-groups/probe*；GET .../probe-plan | agg_probe_config |
 | 单模型启用/禁用 | PATCH /admin/api/upstreams/{id}/models | up_upstream(models) |
 | 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
 | 用量三层统计 | GET /admin/api/usage/summary\|by-model\|by-key\|logs | log_usage |
+| 用量按单元（号池核算） | GET /admin/api/usage/by-unit | log_usage(upstream_model) |
 | 延迟探测参数配置 | GET/PUT /admin/api/config/probe | sys_setting |
 | 重试参数配置 | GET/PUT /admin/api/config/retry | sys_setting |
 | 故障转移参数配置 | GET/PUT /admin/api/config/failover | sys_setting |

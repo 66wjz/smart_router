@@ -149,3 +149,94 @@ async def list_source_models(request: Request, upstream: str, _=Depends(check_au
         if isinstance(m, dict) and m.get("name")
     ]
     return {"upstream": upstream, "models": models}
+
+
+# ------------------------------------------------------------
+# 聚合组探测配置（CH-021）
+# ------------------------------------------------------------
+
+class ProbeSchedule(BaseModel):
+    """探测时间段：mode=always 全天候；mode=window 按星期 + 时段"""
+    mode: str = "always"
+    days: list[int] = []                      # 1=周一 … 7=周日，空=每天
+    windows: list[dict] = []                  # [{"start":"08:00","end":"23:00"}]，空=全天
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_ok(cls, v):
+        if v not in ("always", "window"):
+            raise ValueError("mode 只能是 always 或 window")
+        return v
+
+
+class GroupProbeUpdate(BaseModel):
+    enabled: bool = False
+    interval_seconds: int | None = None
+    slow_threshold_seconds: float | None = None
+    sort_mode: str = "stable"
+    schedule: ProbeSchedule | None = None
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def _interval_min(cls, v):
+        if v is None or v == 0:
+            return None  # 0 = 跟随全局
+        if v < 10:
+            raise ValueError("探测间隔不能小于 10 秒（0 表示跟随全局）")
+        return v
+
+    @field_validator("slow_threshold_seconds")
+    @classmethod
+    def _slow_min(cls, v):
+        if v is None or v == 0:
+            return None  # 0 = 跟随全局
+        if v < 1:
+            raise ValueError("慢阈值不能小于 1 秒（0 表示跟随全局）")
+        return v
+
+    @field_validator("sort_mode")
+    @classmethod
+    def _sort_ok(cls, v):
+        if v not in ("stable", "latency"):
+            raise ValueError("sort_mode 只能是 stable 或 latency")
+        return v
+
+
+@router.get("/model-groups/probe-configs")
+async def list_probe_configs(request: Request, _=Depends(check_auth)):
+    """所有聚合组的探测配置（含生效值与全局继承结果）"""
+    svc: ConfigService = request.app.state.config_service
+    return {"configs": svc.list_probe_configs()}
+
+
+@router.put("/model-groups/probe")
+async def save_group_probe(model: str, req: GroupProbeUpdate, request: Request, _=Depends(check_auth)):
+    """保存某聚合组的探测策略（组配置优先于全局，留空字段跟随全局）"""
+    if not model:
+        raise HTTPException(400, "model 必填")
+    svc: ConfigService = request.app.state.config_service
+    cfg = request.app.state.config
+    if model not in cfg.collect_group_members() and model not in cfg.get_probe_configs():
+        raise HTTPException(404, f"聚合组 {model} 不存在")
+    data = req.model_dump()
+    if data.get("schedule") is None:
+        data["schedule"] = {"mode": "always"}
+    svc.save_group_probe(model, data)
+    return {"ok": True, "model": model}
+
+
+@router.delete("/model-groups/probe")
+async def delete_group_probe(model: str, request: Request, _=Depends(check_auth)):
+    """恢复该组探测配置为默认（不探测）"""
+    if not model:
+        raise HTTPException(400, "model 必填")
+    svc: ConfigService = request.app.state.config_service
+    request.app.state.config.delete_probe_config(model)
+    return {"ok": True, "model": model}
+
+
+@router.get("/model-groups/probe-plan")
+async def get_probe_plan(request: Request, _=Depends(check_auth)):
+    """全局去重后的探测计划：有哪些单元、各自间隔、被哪些组引用、探测成本"""
+    svc: ConfigService = request.app.state.config_service
+    return svc.get_probe_plan(probe=getattr(request.app.state, "probe", None))

@@ -53,6 +53,7 @@ class _UsageTracker:
         self.estimated = False
         self.usage_seen = False
         self.injected_usage = False  # True=中转站主动注入 stream_options（末 chunk 需剥离）
+        self.upstream_model: str | None = None  # 上游真实模型名（异名聚合时与请求名不同）
         # 流式输出文本累计（估算降级用）
         self._stream_text_len = 0
 
@@ -174,6 +175,7 @@ class _UsageTracker:
             "upstream_id": getattr(self, "upstream_id", None),
             "upstream_name": getattr(self, "upstream_name", None),
             "model": self.model,
+            "upstream_model": getattr(self, "upstream_model", None),
             "protocol": self.protocol,
             "stream": self.is_stream,
             "status": status,
@@ -187,11 +189,13 @@ class _UsageTracker:
             "error_msg": error_msg,
         })
 
-    # 供 _forward 成功后补记命中的 upstream
-    def set_hit_upstream(self, upstream_id: str) -> None:
+    # 供 _forward 成功后补记命中的 upstream + 上游真实模型名（CH-021 号池核算）
+    def set_hit_upstream(self, upstream_id: str, upstream_model: str | None = None) -> None:
         self.upstream_id = upstream_id
         upstream = self.cfg.get_upstream(upstream_id) or {}
         self.upstream_name = upstream.get("name", upstream_id)
+        if upstream_model:
+            self.upstream_model = upstream_model
 
 
 class RouterService:
@@ -258,6 +262,9 @@ class RouterService:
                 })
             if not candidates:
                 self._check_group(resolved[0]["upstream"], key_groups, resolved[0]["model"])  # 抛 403
+            # CH-021：按该组的探测排序策略（stable / latency）重排，全部不可用时回退配置顺序
+            if len(candidates) > 1 and self.config.is_model_group(model_name):
+                candidates = self.probe.sort_group_candidates(candidates, model_name, self.health)
 
         if self.config.log_routing:
             detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in candidates)
@@ -325,7 +332,7 @@ class RouterService:
                 if i > 0 and self.config.log_routing:
                     log.info(f"重试成功: {candidates[i-1]['model'].split('/')[-1]} → {model.split('/')[-1]}")
                 if tracker is not None:
-                    tracker.set_hit_upstream(upstream_id)
+                    tracker.set_hit_upstream(upstream_id, model)
                     if is_stream:
                         result = self._wrap_stream_with_usage(result, tracker, tracker.injected_usage)
                     else:

@@ -12,6 +12,11 @@ export function getUsageByKey(range: string) {
   return request.get('/admin/api/usage/by-key', { params: { range } })
 }
 
+/** 按「上游源 × 上游真实模型名」聚合（号池消耗核算，CH-021） */
+export function getUsageByUnit(range: string) {
+  return request.get('/admin/api/usage/by-unit', { params: { range } })
+}
+
 export function getUsageLogs(params: {
   range: string
   page?: number

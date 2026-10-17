@@ -65,6 +65,36 @@
         <el-table-column prop="upstream_count" label="源数" width="70" />
       </el-table>
 
+      <!-- 按单元（上游源 × 真实模型） -->
+      <h4 style="margin: 16px 0 8px">
+        按单元（上游源 × 真实模型）
+        <el-text type="info" size="small">— 号池积分消耗核算，聚合请求会落到真实模型名</el-text>
+      </h4>
+      <el-table :data="byUnit" stripe size="small" v-loading="loading">
+        <el-table-column label="上游源" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.upstream_name || row.upstream_id }}</template>
+        </el-table-column>
+        <el-table-column prop="upstream_model" label="真实模型名" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="requests" label="请求数" width="90" sortable />
+        <el-table-column label="错误数" width="90">
+          <template #default="{ row }">
+            <span :style="row.error_count ? 'color: var(--accent-red)' : ''">{{ row.error_count }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_tokens" label="总 Tokens" width="120" sortable>
+          <template #default="{ row }">{{ formatTokens(row.total_tokens) }}</template>
+        </el-table-column>
+        <el-table-column label="请求名数" width="90">
+          <template #default="{ row }">{{ row.request_models }}</template>
+        </el-table-column>
+        <el-table-column prop="avg_duration_ms" label="平均耗时" width="100">
+          <template #default="{ row }">{{ row.avg_duration_ms ? row.avg_duration_ms + 'ms' : '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <div v-if="!byUnit.length" class="empty-tip">
+        <el-text type="info" size="small">暂无数据。该统计需要请求实际命中上游后才会有记录。</el-text>
+      </div>
+
       <!-- 按 Key -->
       <h4 style="margin: 16px 0 8px">按 API Key</h4>
       <el-table :data="byKey" stripe size="small" v-loading="loading">
@@ -146,13 +176,14 @@ import BaseSection from '@/components/base/BaseSection.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
-import { getUsageByKey, getUsageLogs, getUsageByModel, getUsageSummary } from '@/api/usage'
+import { getUsageByKey, getUsageByUnit, getUsageLogs, getUsageByModel, getUsageSummary } from '@/api/usage'
 
 const range = ref('today')
 const loading = ref(false)
 const summary = ref<any>({ total: 0, total_tokens: 0, success_rate: null, active_keys: 0, top_errors: [] })
 const byModel = ref<any[]>([])
 const byKey = ref<any[]>([])
+const byUnit = ref<any[]>([])
 
 const logs = ref<any[]>([])
 const logsLoading = ref(false)
@@ -183,14 +214,16 @@ function formatTime(s: string): string {
 async function load() {
   loading.value = true
   try {
-    const [s, m, k]: any = await Promise.all([
+    const [s, m, k, u]: any = await Promise.all([
       getUsageSummary(range.value),
       getUsageByModel(range.value),
       getUsageByKey(range.value),
+      getUsageByUnit(range.value),
     ])
     summary.value = s
     byModel.value = m.models || []
     byKey.value = k.keys || []
+    byUnit.value = u.units || []
   } finally {
     loading.value = false
   }

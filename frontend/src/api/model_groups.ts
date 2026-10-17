@@ -44,3 +44,67 @@ export function listGroupSuggestions() {
 export function listSourceModels(upstream: string) {
   return request.get('/admin/api/model-groups/source-models', { params: { upstream } })
 }
+
+// ---------- 聚合组探测配置（CH-021） ----------
+
+export interface ProbeWindow {
+  start: string
+  end: string
+}
+
+export interface ProbeSchedule {
+  mode: 'always' | 'window'
+  days: number[]
+  windows: ProbeWindow[]
+}
+
+export interface GroupProbeConfig {
+  enabled: boolean
+  interval_seconds: number | null
+  slow_threshold_seconds: number | null
+  sort_mode: 'stable' | 'latency'
+  schedule: ProbeSchedule
+}
+
+export interface ProbeUnit {
+  key: string
+  upstream: string
+  upstream_name: string
+  model: string
+  groups: string[]
+  sources: string[]
+  interval: number
+  latency: number | null
+  status: string
+  last_check: number
+  stale: boolean
+  active_now: boolean
+}
+
+export interface ProbePlan {
+  summary: {
+    unit_count: number
+    member_refs: number
+    dedup_saved: number
+    daily_requests: number
+    global_interval: number
+  }
+  units: ProbeUnit[]
+}
+
+export function listProbeConfigs() {
+  return request.get('/admin/api/model-groups/probe-configs')
+}
+
+export function saveGroupProbe(model: string, data: GroupProbeConfig) {
+  return request.put('/admin/api/model-groups/probe', data, { params: { model } })
+}
+
+export function deleteGroupProbe(model: string) {
+  return request.delete('/admin/api/model-groups/probe', { params: { model } })
+}
+
+/** 全局去重后的探测计划（含成本估算与被引用关系） */
+export function getProbePlan() {
+  return request.get('/admin/api/model-groups/probe-plan')
+}

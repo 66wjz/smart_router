@@ -124,7 +124,16 @@ async def startup():
             get_conn().executescript(f.read())
     except Exception as e:
         log.warning(f"log_usage 表初始化失败（稍后写入时再建）: {e}")
+    # CH-021：聚合探测配置表 + log_usage.upstream_model 列（幂等补齐）
+    try:
+        config.sync_probe_config_table()
+        config.load()
+        from app.repositories.usage_repo import UsageRepository
+        UsageRepository()._ensure_unit_column()
+    except Exception as e:
+        log.warning(f"CH-021 增量结构补齐失败: {e}")
     usage_buffer.start_worker()
+    probe._init_models()
     asyncio.create_task(probe.run_loop(HTTP_CLIENT))
     log.info(f"Smart Router v5.2.0 启动，监听端口 {config.listen_port}")
 

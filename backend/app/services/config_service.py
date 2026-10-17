@@ -205,6 +205,73 @@ class ConfigService:
     def delete_model_group(self, model: str) -> None:
         self.config.delete_model_group(model)
 
+    # ---------- 聚合组探测配置（CH-021） ----------
+
+    def save_group_probe(self, model: str, data: dict) -> None:
+        self.config.save_probe_config(model, data)
+
+    def get_probe_plan(self, probe=None) -> dict:
+        """全局去重探测计划 + 汇总（含探测成本估算）"""
+        plan = self.config.collect_probe_plan()
+        members = self.config.collect_group_members()
+        total_members = sum(len(v) for v in members.values())
+        panel = probe.get_panel() if probe is not None else {}
+        daily = 0
+        units = []
+        for key, item in plan.items():
+            try:
+                daily += int(86400 / max(1, item["interval"]))
+            except (TypeError, ValueError):
+                pass
+            uid = item["upstream"]
+            upstream = self.config.get_upstream(uid) or {}
+            live = (probe.data.get(key) if probe is not None else None) or {}
+            units.append({
+                "key": key,
+                "upstream": uid,
+                "upstream_name": upstream.get("name", uid),
+                "model": item["model"],
+                "groups": item["groups"],
+                "sources": item["sources"],
+                "interval": item["interval"],
+                "latency": live.get("latency"),
+                "status": live.get("status", "unknown"),
+                "last_check": live.get("last_check", 0),
+                "stale": bool(panel.get(key, {}).get("stale")),
+                "active_now": self.config.probe_plan_active(item),
+            })
+        units.sort(key=lambda u: (u["upstream"], u["model"]))
+        return {
+            "summary": {
+                "unit_count": len(plan),
+                "member_refs": total_members,
+                "dedup_saved": max(0, total_members - len(plan)),
+                "daily_requests": daily,
+                "global_interval": self.config.probe_config.get("interval_seconds", 120),
+            },
+            "units": units,
+        }
+
+    def list_probe_configs(self) -> dict:
+        """各聚合组的探测配置 + 生效值（供聚合页展示）"""
+        configs = self.config.get_probe_configs()
+        members = self.config.collect_group_members()
+        result = {}
+        for name in set(configs) | set(members):
+            settings = self.config.group_probe_settings(name)
+            result[name] = {
+                "model": name,
+                "configured": settings["configured"],
+                "enabled": settings["enabled"],
+                "interval_seconds": settings["interval_seconds"],
+                "slow_threshold_seconds": settings["slow_threshold_seconds"],
+                "sort_mode": settings["sort_mode"],
+                "schedule": settings["schedule"],
+                "member_count": len(members.get(name) or []),
+                "raw": configs.get(name, {}),
+            }
+        return result
+
     # ---------- 系统参数 ----------
 
     def get_probe_config(self) -> dict:

@@ -36,6 +36,53 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-row :gutter="16">
+          <el-col :span="8">
+            <el-form-item label="慢阈值（秒）">
+              <el-input-number v-model="probeForm.slow_threshold_seconds" :min="1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="探测并发数">
+              <el-input-number v-model="probeForm.max_concurrency" :min="1" :max="50" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="探测失败计入 Key 冷却">
+              <el-switch v-model="probeForm.count_key_failures" />
+              <div class="form-hint">
+                默认关闭。开启后探测超时/401 会计入 Key 连续失败，可能把唯一 Key 打进冷却，导致真实请求失败。
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="全局探测时段">
+          <el-radio-group v-model="globalSchedule.mode">
+            <el-radio value="always">全天候</el-radio>
+            <el-radio value="window">仅指定时段</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="globalSchedule.mode === 'window'">
+          <el-form-item label="星期">
+            <el-checkbox-group v-model="globalSchedule.days">
+              <el-checkbox v-for="d in DAY_OPTIONS" :key="d.value" :value="d.value">{{ d.label }}</el-checkbox>
+            </el-checkbox-group>
+            <div class="form-hint">不勾选 = 每天。此项作用于「路由规则 / 别名」命中的单元；聚合组可在聚合页单独设置。</div>
+          </el-form-item>
+          <el-form-item label="时段窗口">
+            <div class="window-list">
+              <div v-for="(w, i) in globalSchedule.windows" :key="i" class="window-row">
+                <el-time-select v-model="w.start" start="00:00" end="23:30" step="00:30" placeholder="开始" style="width: 130px" />
+                <span class="sep">→</span>
+                <el-time-select v-model="w.end" start="00:30" end="23:59" step="00:30" placeholder="结束" style="width: 130px" />
+                <BaseButton variant="danger" size="sm" @click="globalSchedule.windows.splice(i, 1)">删除</BaseButton>
+              </div>
+              <BaseButton variant="ghost" size="sm" @click="globalSchedule.windows.push({ start: '08:00', end: '23:00' })">
+                + 添加时段
+              </BaseButton>
+            </div>
+          </el-form-item>
+        </template>
         <el-form-item>
           <BaseButton variant="primary" :disabled="saving" @click="handleSaveProbe">
             {{ saving ? '保存中...' : '保存探测设置' }}
@@ -166,6 +213,17 @@ const failoverForm = reactive<any>({})
 const smartRetryForm = reactive<any>({ extra_attempts: 2, backoff_ms: [500, 1500], jitter: 0.2 })
 const smartRetryBackoffText = ref('500, 1500')
 
+const DAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 7, label: '周日' },
+]
+const globalSchedule = reactive<any>({ mode: 'always', days: [], windows: [] })
+
 async function load() {
   const [probe, retry, failover, smartRetry]: any = await Promise.all([
     getProbeConfig(),
@@ -174,10 +232,20 @@ async function load() {
     getSmartRetryConfig(),
   ])
   Object.assign(probeForm, probe)
+  if (probeForm.count_key_failures === undefined) probeForm.count_key_failures = false
+  if (probeForm.max_concurrency === undefined) probeForm.max_concurrency = 5
+  applyGlobalSchedule(probeForm.schedule)
   Object.assign(retryForm, retry)
   Object.assign(failoverForm, failover)
   Object.assign(smartRetryForm, smartRetry)
   smartRetryBackoffText.value = (smartRetryForm.backoff_ms || []).join(', ')
+}
+
+function applyGlobalSchedule(raw: any) {
+  const sched = raw && typeof raw === 'object' ? raw : { mode: 'always' }
+  globalSchedule.mode = sched.mode === 'window' ? 'window' : 'always'
+  globalSchedule.days = [...(sched.days || [])]
+  globalSchedule.windows = (sched.windows || []).map((w: any) => ({ start: w.start, end: w.end }))
 }
 
 async function save(fn: any, form: any) {
@@ -191,7 +259,15 @@ async function save(fn: any, form: any) {
   }
 }
 
-const handleSaveProbe = () => save(saveProbeConfig, probeForm)
+const handleSaveProbe = () =>
+  save(saveProbeConfig, {
+    ...probeForm,
+    schedule: {
+      mode: globalSchedule.mode,
+      days: globalSchedule.mode === 'window' ? globalSchedule.days : [],
+      windows: globalSchedule.mode === 'window' ? globalSchedule.windows : [],
+    },
+  })
 const handleSaveRetry = () => save(saveRetryConfig, retryForm)
 const handleSaveFailover = () => save(saveFailoverConfig, failoverForm)
 
@@ -219,3 +295,25 @@ async function handleReload() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.form-hint {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.window-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.window-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.window-row .sep {
+  color: var(--text-tertiary);
+}
+</style>

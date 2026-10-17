@@ -27,6 +27,12 @@ async def usage_by_model(request: Request, range: str = "7d", _=Depends(check_au
     return {"models": _repo().by_model(range)}
 
 
+@router.get("/usage/by-unit")
+async def usage_by_unit(request: Request, range: str = "7d", _=Depends(check_auth)):
+    """按「上游源 × 上游真实模型名」聚合（号池消耗核算，CH-021）"""
+    return {"units": _repo().by_unit(range)}
+
+
 @router.get("/usage/by-key")
 async def usage_by_key(request: Request, range: str = "7d", _=Depends(check_auth)):
     """Key 级聚合（按 tokens 降序）"""

@@ -9,11 +9,13 @@ import logging
 import threading
 
 from app.core.key_pool import KeyPool
+from app.core.probe_schedule import is_active as schedule_is_active
 from app.repositories import (
     AggregatedNameRepository,
     ApiKeyRepository,
     ModelGroupRepository,
     PointerRepository,
+    ProbeConfigRepository,
     RuleRepository,
     SettingRepository,
     UpstreamKeyRepository,
@@ -35,6 +37,7 @@ class AppConfig:
         self._pointers: list[dict] = []
         self._aggregated_names: list[str] = []
         self._model_groups: dict[str, dict] = {}
+        self._probe_configs: dict[str, dict] = {}
         self._settings: dict = {}
         self._repos = {
             "upstream": UpstreamRepository(),
@@ -44,6 +47,7 @@ class AppConfig:
             "pointer": PointerRepository(),
             "aggregated": AggregatedNameRepository(),
             "model_group": ModelGroupRepository(),
+            "probe_config": ProbeConfigRepository(),
             "setting": SettingRepository(),
         }
         self.key_pool = KeyPool()
@@ -64,13 +68,14 @@ class AppConfig:
                 self._pointers = self._repos["pointer"].list_all()
                 self._aggregated_names = self._repos["aggregated"].list_names()
                 self._model_groups = self._repos["model_group"].list_all()
+                self._probe_configs = self._repos["probe_config"].list_all()
                 self._settings = self._repos["setting"].get_all()
             except sqlite3.OperationalError:
                 log.warning("数据库表不存在，配置为空（请先执行 seed.py 初始化）")
                 self._upstreams, self._rules = [], []
                 self._api_keys, self._pointers = [], []
                 self._aggregated_names, self._settings = [], {}
-                self._model_groups = {}
+                self._model_groups, self._probe_configs = {}, {}
             self._load_upstream_keys()
             log.info(f"配置已加载: {len(self._upstreams)} 上游源, {len(self._rules)} 规则, "
                      f"{len(self._api_keys)} 密钥, {len(self._pointers)} 别名")
@@ -403,6 +408,187 @@ class AppConfig:
                     found.append(uid)
                     break
         return found
+
+    # ============================================================
+    # 聚合组探测配置（CH-021）
+    # ============================================================
+
+    def get_probe_configs(self) -> dict[str, dict]:
+        """全部聚合组的探测配置 {聚合名: {...}}"""
+        with self._lock:
+            return copy.deepcopy(self._probe_configs)
+
+    def sync_probe_config_table(self) -> None:
+        """建表（幂等），供启动时补齐增量表"""
+        self._repos["probe_config"].execute(
+            "CREATE TABLE IF NOT EXISTS agg_probe_config ("
+            "model TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, "
+            "interval_seconds INTEGER, slow_threshold_seconds REAL, "
+            "sort_mode TEXT NOT NULL DEFAULT 'stable', "
+            "schedule TEXT NOT NULL DEFAULT '{}', "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+
+    def save_probe_config(self, model: str, data: dict) -> None:
+        """保存某聚合组的探测策略并热加载"""
+        self._repos["probe_config"].upsert(model, data)
+        with self._lock:
+            self._probe_configs = self._repos["probe_config"].list_all()
+
+    def delete_probe_config(self, model: str) -> None:
+        """删除组探测配置（该组回到"不探测"，全局探测不受影响）"""
+        self._repos["probe_config"].delete(model)
+        with self._lock:
+            self._probe_configs = self._repos["probe_config"].list_all()
+
+    def group_probe_settings(self, group_name: str) -> dict:
+        """某聚合组的生效探测参数：组配置 → 全局 latency_probe → 内置默认"""
+        conf = self._probe_configs.get(group_name) or {}
+        global_cfg = self.probe_config
+        return {
+            "enabled": bool(conf.get("enabled", False)),
+            "interval_seconds": conf.get("interval_seconds") or global_cfg.get("interval_seconds", 120),
+            "slow_threshold_seconds": conf.get("slow_threshold_seconds")
+            if conf.get("slow_threshold_seconds") is not None
+            else global_cfg.get("slow_threshold_seconds", 10),
+            "sort_mode": conf.get("sort_mode") or "stable",
+            "schedule": conf.get("schedule") or global_cfg.get("schedule") or {"mode": "always"},
+            "configured": bool(conf),
+        }
+
+    def collect_group_members(self) -> dict[str, list[dict]]:
+        """所有聚合组及其成员（人工配置优先，否则同名自动发现）
+        返回 {聚合名: [{upstream, model}]}，model 为该源真实模型名（支持异名）"""
+        discovered: dict[str, list[str]] = {}
+        for u in self._upstreams:
+            uid = u.get("upstream_id", "")
+            if not self.is_upstream_enabled(uid):
+                continue
+            for m in u.get("models") or []:
+                name = m.get("name") if isinstance(m, dict) else str(m)
+                if not name or not self.is_model_enabled(uid, name):
+                    continue
+                discovered.setdefault(name, []).append(uid)
+
+        result: dict[str, list[dict]] = {}
+        for name in set(discovered) | set(self._model_groups):
+            conf = self._model_groups.get(name)
+            if conf is not None:
+                if not conf.get("enabled", True):
+                    continue  # 聚合关闭 → 不构成聚合组
+                members = []
+                seen = set()
+                for item in conf.get("upstreams", []):
+                    uid = item.get("upstream", "")
+                    actual = item.get("model") or name
+                    if not uid or (uid, actual) in seen:
+                        continue
+                    if not self.is_upstream_enabled(uid) or not self.is_model_enabled(uid, actual):
+                        continue
+                    seen.add((uid, actual))
+                    members.append({"upstream": uid, "model": actual})
+                result[name] = members
+            else:
+                auto = discovered.get(name, [])
+                if len(auto) >= 2:
+                    result[name] = [{"upstream": uid, "model": name} for uid in auto]
+        return result
+
+    def is_model_group(self, name: str) -> bool:
+        """是否为聚合组名（轻量判断，供请求路径使用）
+        人工配置且启用 → 是；否则同名模型分布在 >=2 个启用的上游源 → 是"""
+        conf = self._model_groups.get(name)
+        if conf is not None:
+            return bool(conf.get("enabled", True))
+        count = 0
+        for u in self._upstreams:
+            uid = u.get("upstream_id", "")
+            if not self.is_upstream_enabled(uid):
+                continue
+            for m in u.get("models") or []:
+                if isinstance(m, dict) and m.get("name") == name:
+                    count += 1
+                    break
+            if count >= 2:
+                return True
+        return False
+
+    def collect_probe_plan(self) -> dict[str, dict]:
+        """全局去重后的探测计划（CH-021）
+
+        单元 = (上游源, 该源真实模型名)，全局唯一；聚合组只"引用"单元，不拥有。
+        返回 {f"{upstream}:{model}": {upstream, model, interval, groups, sources, schedule}}
+        多个启用组引用同一单元时，间隔取最小值（最严格的组决定新鲜度）。
+        """
+        global_cfg = self.probe_config
+        global_interval = global_cfg.get("interval_seconds", 120)
+        global_enabled = bool(global_cfg.get("enabled", True))
+
+        plan: dict[str, dict] = {}
+
+        def add(upstream_id: str, model: str, source: str, group: str | None = None,
+                interval: int | None = None) -> None:
+            if not upstream_id or not model:
+                return
+            key = f"{upstream_id}:{model}"
+            entry = plan.get(key)
+            if entry is None:
+                plan[key] = {
+                    "upstream": upstream_id,
+                    "model": model,
+                    "interval": interval or global_interval,
+                    "groups": [group] if group else [],
+                    "sources": [source],
+                }
+                return
+            if group and group not in entry["groups"]:
+                entry["groups"].append(group)
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+            if interval:
+                entry["interval"] = min(entry["interval"], interval)
+
+        # 1) 聚合组成员
+        for group_name, members in self.collect_group_members().items():
+            settings = self.group_probe_settings(group_name)
+            if not settings["enabled"]:
+                continue
+            for m in members:
+                add(m["upstream"], m["model"], "group", group_name, settings["interval_seconds"])
+
+        # 2) 路由规则候选 + 3) 别名目标（受全局开关注册）
+        if global_enabled:
+            for rule in self._rules:
+                for c in rule.get("candidates", []):
+                    add(c.get("upstream", self.default_upstream), c.get("model", ""), "rule")
+            for p in self._pointers:
+                target = p.get("target_model", "")
+                for uid in self.collect_model_upstreams(target):
+                    add(uid, target, "pointer")
+
+        # 过滤：上游禁用 / 探测禁用 / 模型级禁用
+        for key in list(plan.keys()):
+            item = plan[key]
+            uid = item["upstream"]
+            if not self.is_upstream_enabled(uid) or not self.is_upstream_probe_enabled(uid):
+                del plan[key]
+                continue
+            if not self.is_model_enabled(uid, item["model"]):
+                del plan[key]
+        return plan
+
+    def probe_plan_active(self, item: dict) -> bool:
+        """该探测单元当前是否允许探测
+
+        单元被多个"启用探测的组"引用时，任一组处于探测时段即探测（并集语义）；
+        若只有规则/别名引用，则看全局 schedule。
+        """
+        for group_name in item.get("groups") or []:
+            if schedule_is_active(self.group_probe_settings(group_name)["schedule"]):
+                return True
+        if item.get("groups"):
+            return False  # 只被聚合组引用，且这些组当前都在时段外
+        return schedule_is_active(self.probe_config.get("schedule"))
 
     # ============================================================
     # API Key 校验

@@ -9,20 +9,36 @@ class UsageRepository(BaseRepository):
     TABLE = "log_usage"
 
     def insert_many(self, rows: list[dict]) -> int:
-        """批量插入用量记录，返回插入条数"""
+        """批量插入用量记录，返回插入条数
+        CH-021：upstream_model 列可能尚未迁移（旧库），此时退回旧列写法，避免整批丢弃"""
         if not rows:
             return 0
-        sql = (
-            f"INSERT INTO {self.TABLE} "
-            f"(ts, api_key_id, api_key_name, upstream_id, upstream_name, model, protocol, stream, "
-            f" status, http_status, prompt_tokens, completion_tokens, total_tokens, estimated, "
-            f" duration_ms, first_token_ms, error_msg) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        params = [
-            (
+        has_unit_col = self._ensure_unit_column()
+        if has_unit_col:
+            sql = (
+                f"INSERT INTO {self.TABLE} "
+                f"(ts, api_key_id, api_key_name, upstream_id, upstream_name, model, upstream_model, "
+                f" protocol, stream, status, http_status, prompt_tokens, completion_tokens, total_tokens, "
+                f" estimated, duration_ms, first_token_ms, error_msg) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+        else:
+            sql = (
+                f"INSERT INTO {self.TABLE} "
+                f"(ts, api_key_id, api_key_name, upstream_id, upstream_name, model, protocol, stream, "
+                f" status, http_status, prompt_tokens, completion_tokens, total_tokens, estimated, "
+                f" duration_ms, first_token_ms, error_msg) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+        params = []
+        for r in rows:
+            base = (
                 r.get("ts"), r.get("api_key_id"), r.get("api_key_name"),
                 r.get("upstream_id"), r.get("upstream_name"), r.get("model"),
+            )
+            if has_unit_col:
+                base += (r.get("upstream_model"),)
+            base += (
                 r.get("protocol", "chat"), 1 if r.get("stream") else 0,
                 r.get("status", "success"), r.get("http_status", 200),
                 r.get("prompt_tokens", 0), r.get("completion_tokens", 0), r.get("total_tokens", 0),
@@ -30,9 +46,28 @@ class UsageRepository(BaseRepository):
                 r.get("duration_ms"), r.get("first_token_ms"),
                 (r.get("error_msg") or "")[:500],
             )
-            for r in rows
-        ]
+            params.append(base)
         return self._lock_cursor_batch(sql, params)
+
+    _unit_col_state: bool | None = None
+
+    def _ensure_unit_column(self) -> bool:
+        """检查（并按需创建）upstream_model 列；结果缓存在类上"""
+        if UsageRepository._unit_col_state is not None:
+            return UsageRepository._unit_col_state
+        try:
+            cols = self.query(f"PRAGMA table_info({self.TABLE})")
+            names = {c.get("name") for c in cols}
+            if "upstream_model" not in names:
+                self.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN upstream_model TEXT")
+                self.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_usage_unit "
+                    f"ON {self.TABLE}(upstream_id, upstream_model, ts)"
+                )
+            UsageRepository._unit_col_state = True
+        except Exception:
+            UsageRepository._unit_col_state = False
+        return bool(UsageRepository._unit_col_state)
 
     def _lock_cursor_batch(self, sql: str, params: list[tuple]) -> int:
         from app.core.database import get_conn
@@ -121,6 +156,34 @@ class UsageRepository(BaseRepository):
         )
         for r in rows:
             r["error_count"] = r["requests"] - r["success_count"]
+        return rows
+
+    def by_unit(self, range_name: str = "7d") -> list[dict]:
+        """按「上游源 × 上游真实模型名」聚合（CH-021 号池消耗核算）
+
+        老数据（CH-021 之前）没有 upstream_model，用 '（历史）' 归并，避免丢量。
+        """
+        cond, params = self._range_clause(range_name)
+        if not self._ensure_unit_column():
+            return []
+        rows = self.query(
+            f"SELECT upstream_id, upstream_name, "
+            f"COALESCE(NULLIF(upstream_model, ''), model) AS upstream_model, "
+            f"COUNT(*) AS requests, "
+            f"SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, "
+            f"COUNT(DISTINCT model) AS request_models, "
+            f"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            f"COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            f"COALESCE(SUM(total_tokens), 0) AS total_tokens, "
+            f"COALESCE(ROUND(AVG(CASE WHEN status='success' THEN duration_ms END)), 0) AS avg_duration_ms, "
+            f"MAX(ts) AS last_ts "
+            f"FROM {self.TABLE} WHERE {cond} AND upstream_id IS NOT NULL "
+            f"GROUP BY upstream_id, upstream_name, upstream_model "
+            f"ORDER BY total_tokens DESC LIMIT 500",
+            params,
+        )
+        for r in rows:
+            r["error_count"] = (r.get("requests", 0) or 0) - (r.get("success_count", 0) or 0)
         return rows
 
     def logs(self, range_name: str = "today", page: int = 1, size: int = 50,

@@ -56,6 +56,7 @@
             <BaseBadge :variant="g.members.length > 1 ? 'green' : 'amber'">
               {{ g.enabled ? `${g.members.length} 源聚合` : '聚合已关闭' }}
             </BaseBadge>
+            <BaseBadge :variant="probeBadge(g).variant">{{ probeBadge(g).text }}</BaseBadge>
           </div>
           <div class="group-ops">
             <span class="op-label">启用聚合</span>
@@ -68,6 +69,7 @@
             <BaseButton v-if="g.configured" variant="ghost" size="sm" :disabled="savingModel === g.model" @click="resetGroup(g)">
               恢复自动
             </BaseButton>
+            <BaseButton variant="ghost" size="sm" @click="openProbe(g)">探测设置</BaseButton>
             <BaseButton variant="primary" size="sm" :disabled="savingModel === g.model" @click="openEdit(g)">
               {{ savingModel === g.model ? '保存中…' : '编辑成员' }}
             </BaseButton>
@@ -99,6 +101,44 @@
       </div>
     </BaseSection>
 
+    <!-- 探测计划（全局去重） -->
+    <BaseSection v-if="plan.units.length" variant="card" title="探测计划（全局去重）" style="margin-top: 16px">
+      <template #actions>
+        <BaseButton variant="ghost" size="sm" @click="loadProbeData">刷新</BaseButton>
+      </template>
+      <el-alert
+        :title="`共 ${plan.summary.unit_count} 个探测单元（按「上游源 × 真实模型」去重，已省掉 ${plan.summary.dedup_saved} 次重复探测）· 每天约 ${plan.summary.daily_requests.toLocaleString()} 次探测请求`"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 12px"
+      />
+      <el-table :data="plan.units" size="small" stripe>
+        <el-table-column prop="upstream_name" label="上游源" width="140" />
+        <el-table-column prop="model" label="真实模型名" min-width="220" show-overflow-tooltip />
+        <el-table-column label="被哪些组引用" min-width="200">
+          <template #default="{ row }">
+            <BaseBadge v-for="g in row.groups" :key="g" variant="blue" style="margin-right: 4px">{{ g }}</BaseBadge>
+            <el-text v-if="!row.groups.length" type="info" size="small">仅路由规则/别名</el-text>
+          </template>
+        </el-table-column>
+        <el-table-column label="间隔" width="90">
+          <template #default="{ row }">{{ row.interval }}s</template>
+        </el-table-column>
+        <el-table-column label="最近延迟" width="100">
+          <template #default="{ row }">{{ row.latency != null ? `${row.latency}s` : 'N/A' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="150">
+          <template #default="{ row }">
+            <BaseBadge :variant="row.status === 'ok' ? 'green' : row.status === 'down' ? 'red' : 'gray'">
+              {{ row.status === 'ok' ? '可用' : row.status === 'down' ? '不可用' : '未知' }}
+            </BaseBadge>
+            <BaseBadge v-if="!row.active_now" variant="amber" style="margin-left: 4px">时段外</BaseBadge>
+            <BaseBadge v-else-if="row.stale" variant="gray" style="margin-left: 4px">数据陈旧</BaseBadge>
+          </template>
+        </el-table-column>
+      </el-table>
+    </BaseSection>
+
     <!-- 三、手写聚合名（原有机制，候选来自路由规则） -->
     <BaseSection variant="card" title="聚合模型名（手写规则聚合）" style="margin-top: 16px">
       <el-alert
@@ -121,6 +161,106 @@
         </el-form-item>
       </el-form>
     </BaseSection>
+
+    <!-- 探测设置弹窗 -->
+    <BaseModal v-model:visible="probeVisible" :title="`探测设置：${probeModel}`" size="large">
+      <el-alert
+        title="只影响本聚合组的探测节奏与排序；探测对象是全局去重后的单元，多组共用同一模型时不会重复探测。"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 12px"
+      />
+      <el-form :model="probeForm" label-width="130px">
+        <el-form-item label="启用定时探测">
+          <el-switch v-model="probeForm.enabled" />
+          <el-text type="info" size="small" style="margin-left: 10px">
+            {{ probeForm.enabled ? '按下方节奏探测，结果用于本组排序' : '关闭后本组不新增探测单元（已存在的仍可能被其他组复用）' }}
+          </el-text>
+        </el-form-item>
+
+        <el-form-item label="探测间隔（秒）">
+          <el-input-number
+            v-model="probeForm.interval_seconds"
+            :min="0"
+            :step="10"
+            style="width: 200px"
+          />
+          <el-text type="info" size="small" style="margin-left: 10px">
+            0 = 跟随全局 {{ globalInterval }}s；多组共用同一单元时取最小值
+          </el-text>
+        </el-form-item>
+
+        <el-form-item label="慢阈值（秒）">
+          <el-input-number
+            v-model="probeForm.slow_threshold_seconds"
+            :min="0"
+            :step="1"
+            style="width: 200px"
+          />
+          <el-text type="info" size="small" style="margin-left: 10px">0 = 跟随全局；超过此延迟的成员排到后面</el-text>
+        </el-form-item>
+
+        <el-form-item label="排序模式">
+          <el-radio-group v-model="probeForm.sort_mode">
+            <el-radio value="stable">稳定优先（我定的顺序，慢的沉底）</el-radio>
+            <el-radio value="latency">速度优先（按实时延迟排序）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-divider content-position="left">探测时段</el-divider>
+
+        <el-form-item label="时段模式">
+          <el-radio-group v-model="probeForm.schedule.mode">
+            <el-radio value="always">全天候</el-radio>
+            <el-radio value="window">仅指定时段</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <template v-if="probeForm.schedule.mode === 'window'">
+          <el-form-item label="星期">
+            <el-checkbox-group v-model="probeForm.schedule.days">
+              <el-checkbox v-for="d in DAY_OPTIONS" :key="d.value" :value="d.value">{{ d.label }}</el-checkbox>
+            </el-checkbox-group>
+            <div class="hint">不勾选 = 每天都探测</div>
+          </el-form-item>
+
+          <el-form-item label="时段窗口">
+            <div class="window-list">
+              <div v-for="(w, i) in probeForm.schedule.windows" :key="i" class="window-row">
+                <el-time-select v-model="w.start" start="00:00" end="23:30" step="00:30" placeholder="开始" style="width: 130px" />
+                <span class="sep">→</span>
+                <el-time-select v-model="w.end" start="00:30" end="23:59" step="00:30" placeholder="结束" style="width: 130px" />
+                <BaseButton variant="danger" size="sm" @click="probeForm.schedule.windows.splice(i, 1)">删除</BaseButton>
+              </div>
+              <BaseButton variant="ghost" size="sm" @click="addWindow">+ 添加时段</BaseButton>
+              <div class="hint">
+                例：08:00→23:00 表示夜间不探测；23:00→07:00 表示只在这个跨夜时段探测。窗口外保留最后一次结果并标记「时段外」。
+              </div>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="快捷模板">
+            <BaseButton variant="ghost" size="sm" @click="applyPreset('workday')">工作日全天</BaseButton>
+            <BaseButton variant="ghost" size="sm" @click="applyPreset('daytime')">每天 08:00-23:00</BaseButton>
+            <BaseButton variant="ghost" size="sm" @click="applyPreset('weekend')">仅周末</BaseButton>
+          </el-form-item>
+        </template>
+      </el-form>
+
+      <el-alert
+        v-if="probeMemberCount"
+        :title="`本组 ${probeMemberCount} 个成员；具体去重结果见下方「探测计划」表。`"
+        type="info"
+        :closable="false"
+      />
+
+      <template #footer>
+        <BaseButton variant="ghost" @click="probeVisible = false">取消</BaseButton>
+        <BaseButton variant="primary" :disabled="savingProbe" @click="saveProbe">
+          {{ savingProbe ? '保存中…' : '保存' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- 编辑/新建弹窗 -->
     <BaseModal v-model:visible="editVisible" :title="editMode === 'create' ? '新建聚合' : `编辑聚合：${editModel}`" size="large">
@@ -198,12 +338,16 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import { getAggregatedNames, saveAggregatedNames } from '@/api/aggregated'
 import {
   deleteModelGroup,
+  getProbePlan,
   listGroupSuggestions,
   listModelGroups,
+  listProbeConfigs,
   listSourceModels,
+  saveGroupProbe,
   saveModelGroup,
 } from '@/api/model_groups'
 import { listUpstreams } from '@/api/upstreams'
+import { getProbeConfig } from '@/api/settings'
 import { reloadConfig } from '@/api/common'
 
 // ---------- 原有：手写聚合名 ----------
@@ -217,6 +361,135 @@ const suggestions = ref<any[]>([])
 const upstreams = ref<any[]>([])
 const savingModel = ref('')
 const merging = ref('')
+
+// ---------- 探测（CH-021） ----------
+const probeConfigs = ref<Record<string, any>>({})
+const plan = ref<{ summary: any; units: any[] }>({
+  summary: { unit_count: 0, member_refs: 0, dedup_saved: 0, daily_requests: 0, global_interval: 120 },
+  units: [],
+})
+const globalInterval = ref(120)
+
+const probeVisible = ref(false)
+const probeModel = ref('')
+const probeMemberCount = ref(0)
+const savingProbe = ref(false)
+const probeForm = reactive<any>({
+  enabled: false,
+  interval_seconds: null,
+  slow_threshold_seconds: null,
+  sort_mode: 'stable',
+  schedule: { mode: 'always', days: [], windows: [] },
+})
+
+const DAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 7, label: '周日' },
+]
+
+type BadgeVariant = 'default' | 'blue' | 'green' | 'amber' | 'red' | 'purple' | 'gray'
+
+function probeBadge(g: any): { text: string; variant: BadgeVariant } {
+  const cfg = probeConfigs.value[g.model]
+  if (!cfg || !cfg.enabled) return { text: '探测: 关', variant: 'gray' }
+  const sched = cfg.schedule?.mode === 'window' ? ' · 限时段' : ''
+  const iv = cfg.raw?.interval_seconds ? `${cfg.interval_seconds}s` : `全局${cfg.interval_seconds}s`
+  return { text: `探测: 开 · ${iv}${sched}`, variant: 'green' }
+}
+
+async function loadProbeData() {
+  const [cfgs, pl, gc]: any = await Promise.all([
+    listProbeConfigs(),
+    getProbePlan(),
+    getProbeConfig().catch(() => ({ interval_seconds: 120 })),
+  ])
+  probeConfigs.value = cfgs.configs || {}
+  plan.value = {
+    summary: pl.summary || plan.value.summary,
+    units: pl.units || [],
+  }
+  globalInterval.value = gc?.interval_seconds || 120
+}
+
+function openProbe(g: any) {
+  probeModel.value = g.model
+  probeMemberCount.value = (g.members || []).length
+  const cfg = probeConfigs.value[g.model]
+  const raw = cfg?.raw || {}
+  probeForm.enabled = Boolean(cfg?.enabled)
+  // 0 在 UI 上代表「跟随全局」，落库时转成 null
+  probeForm.interval_seconds = raw.interval_seconds ?? 0
+  probeForm.slow_threshold_seconds = raw.slow_threshold_seconds ?? 0
+  probeForm.sort_mode = cfg?.sort_mode || 'stable'
+  const sched = cfg?.schedule || { mode: 'always' }
+  probeForm.schedule = {
+    mode: sched.mode || 'always',
+    days: [...(sched.days || [])],
+    windows: (sched.windows || []).map((w: any) => ({ start: w.start, end: w.end })),
+  }
+  probeVisible.value = true
+}
+
+function addWindow() {
+  probeForm.schedule.windows.push({ start: '08:00', end: '23:00' })
+}
+
+function applyPreset(kind: string) {
+  probeForm.schedule.mode = 'window'
+  if (kind === 'workday') {
+    probeForm.schedule.days = [1, 2, 3, 4, 5]
+    probeForm.schedule.windows = []
+  } else if (kind === 'daytime') {
+    probeForm.schedule.days = []
+    probeForm.schedule.windows = [{ start: '08:00', end: '23:00' }]
+  } else if (kind === 'weekend') {
+    probeForm.schedule.days = [6, 7]
+    probeForm.schedule.windows = []
+  }
+}
+
+async function saveProbe() {
+  const sched = probeForm.schedule
+  if (sched.mode === 'window') {
+    for (const w of sched.windows) {
+      if (!w.start || !w.end) {
+        ElMessage.warning('时段窗口需要同时填写开始和结束')
+        return
+      }
+      if (w.start === w.end) {
+        ElMessage.warning('时段的开始与结束不能相同')
+        return
+      }
+    }
+  }
+  savingProbe.value = true
+  try {
+    await saveGroupProbe(probeModel.value, {
+      enabled: probeForm.enabled,
+      interval_seconds: probeForm.interval_seconds ? Number(probeForm.interval_seconds) : null,
+      slow_threshold_seconds: probeForm.slow_threshold_seconds ? Number(probeForm.slow_threshold_seconds) : null,
+      sort_mode: probeForm.sort_mode,
+      schedule: {
+        mode: sched.mode,
+        days: sched.mode === 'window' ? sched.days : [],
+        windows: sched.mode === 'window' ? sched.windows : [],
+      },
+    })
+    ElMessage.success('探测设置已保存')
+    probeVisible.value = false
+    await reloadConfig()
+    await loadProbeData()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    savingProbe.value = false
+  }
+}
 
 // 上游源 → 模型名列表缓存
 const sourceModels = reactive<Record<string, string[]>>({})
@@ -249,6 +522,7 @@ async function loadAll() {
   const [g, s]: any = await Promise.all([listModelGroups(), listGroupSuggestions()])
   groups.value = g.groups || []
   suggestions.value = s.suggestions || []
+  await loadProbeData()
 }
 
 async function loadUpstreams() {
@@ -426,6 +700,25 @@ onMounted(async () => {
 <style scoped>
 .empty-tip {
   padding: 8px 0;
+}
+.hint {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.window-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.window-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.window-row .sep {
+  color: var(--text-tertiary);
 }
 /* 建议合并 */
 .suggest-card {
