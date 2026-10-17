@@ -235,26 +235,33 @@ class RouterService:
                 log.info(f"路由: {model_name} → 候选 [{c_str}]{ctx_info}")
             return candidates, "aggregated"
 
-        # 直接请求特定模型名（CH-019：同名模型自动聚合为多候选，按 upstream 顺序降级）
-        upstream_ids = self.config.collect_model_upstreams(model_name)
-        if not upstream_ids:
+        # 直接请求特定模型名（CH-019：同名/异名聚合为多候选，按配置或上游顺序降级）
+        resolved = self.config.resolve_group_candidates(model_name)
+        if not resolved:
             # 全部命中源被禁用/禁模型时，回退旧逻辑拿 upstream_id 用于报错信息
             upstream_id = self.config.find_model_upstream(model_name)
             self._check_group(upstream_id, key_groups, model_name)
             candidates = []
         else:
             candidates = []
-            for uid in upstream_ids:
+            for item in resolved:
+                uid = item["upstream"]
                 try:
-                    self._check_group(uid, key_groups, model_name)
+                    self._check_group(uid, key_groups, item["model"])
                 except HTTPException:
                     continue  # 该源无分组权限，跳过
-                candidates.append({"model": model_name, "upstream": uid, "max_output": None})
+                candidates.append({
+                    "model": item["model"],
+                    "upstream": uid,
+                    "max_output": None,
+                    "weight": item.get("weight", 1),
+                })
             if not candidates:
-                self._check_group(upstream_ids[0], key_groups, model_name)  # 抛 403
+                self._check_group(resolved[0]["upstream"], key_groups, resolved[0]["model"])  # 抛 403
 
         if self.config.log_routing:
-            log.info(f"直接转发: {model_name} → 候选 {len(candidates)} 个源 [{', '.join(c['upstream'] for c in candidates)}]")
+            detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in candidates)
+            log.info(f"直接转发: {model_name} → 候选 {len(candidates)} 个 [{detail}]")
         return candidates, "direct"
 
     def _check_group(self, upstream_id: str, key_groups: set[str] | None, model: str) -> None:

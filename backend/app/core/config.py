@@ -292,24 +292,26 @@ class AppConfig:
         return self.default_upstream
 
     def collect_model_upstreams(self, model_name: str, limit: int | None = None) -> list[str]:
-        """返回模型可用的全部 upstream_id（按 upstream 展示顺序，CH-019 同名自动聚合的候选来源）
+        """返回模型可用的全部 upstream_id（按 upstream 展示顺序）
         过滤：上游禁用 / 模型级禁用；规则候选优先于已配置模型列表
-        CH-019 二期：若该模型存在人工聚合配置，以配置的勾选与顺序为准"""
+        CH-019 二期：若存在人工聚合配置，以配置的勾选与顺序为准（可能含异名成员）"""
         group = self._model_groups.get(model_name)
         if group is not None:
             if not group.get("enabled", True):
-                # 关掉同名聚合 → 退化为单源直连（取配置里的第一个可用源）
+                # 关掉聚合 → 退化为单源直连（取配置里的第一个可用源）
                 for item in group.get("upstreams", []):
                     uid = item.get("upstream", "")
-                    if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
+                    actual = item.get("model") or model_name
+                    if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, actual):
                         return [uid]
                 return []
             result: list[str] = []
             for item in group.get("upstreams", []):
                 uid = item.get("upstream", "")
+                actual = item.get("model") or model_name
                 if not uid or uid in result:
                     continue
-                if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
+                if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, actual):
                     result.append(uid)
                     if limit and len(result) >= limit:
                         return result
@@ -338,6 +340,35 @@ class AppConfig:
                             return matched
                     break
         return matched
+
+    def resolve_group_candidates(self, group_name: str) -> list[dict]:
+        """聚合名 → 候选列表 [{model(真实名), upstream, weight}]
+        优先人工配置（支持异名成员）；否则回退同名自动发现"""
+        group = self._model_groups.get(group_name)
+        if group is None:
+            return [
+                {"model": group_name, "upstream": uid, "weight": 1}
+                for uid in self.collect_model_upstreams(group_name)
+            ]
+        if not group.get("enabled", True):
+            for item in group.get("upstreams", []):
+                uid = item.get("upstream", "")
+                actual = item.get("model") or group_name
+                if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, actual):
+                    return [{"model": actual, "upstream": uid, "weight": item.get("weight", 1)}]
+            return []
+        result: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for item in group.get("upstreams", []):
+            uid = item.get("upstream", "")
+            actual = item.get("model") or group_name
+            if not uid or (uid, actual) in seen:
+                continue
+            if not self.is_upstream_enabled(uid) or not self.is_model_enabled(uid, actual):
+                continue
+            seen.add((uid, actual))
+            result.append({"model": actual, "upstream": uid, "weight": item.get("weight", 1)})
+        return result
 
     # ============================================================
     # 同名模型聚合组（CH-019 二期：可查看/可编辑/可控）

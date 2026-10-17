@@ -302,7 +302,7 @@ Header: `Authorization: Bearer <token>`
 - **出参**: `{ "ok": true, "models": ["model-b", "model-a"] }`
 - **错误码**: 404 上游源不存在
 
-### 4.24 同名模型聚合组列表（CH-019）
+### 4.24 聚合组列表（CH-019 / CH-020）
 
 - **路径**: `GET /admin/api/model-groups`（可选 `?model=xxx` 过滤单个）
 - **鉴权**: JWT
@@ -312,8 +312,12 @@ Header: `Authorization: Bearer <token>`
 {
   "groups": [
     {
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-v4-1-flash",
       "sources": ["dsh", "trae"],
+      "members": [
+        {"upstream": "dsh",  "model": "deepseek/deepseek-v4.1-flash"},
+        {"upstream": "trae", "model": "trae/deepseek-v4.1-flash"}
+      ],
       "enabled": true,
       "configured": false,
       "auto_sources": ["dsh", "trae"]
@@ -322,10 +326,10 @@ Header: `Authorization: Bearer <token>`
 }
 ```
 
-- **字段说明**: `sources` 为当前生效顺序；`configured=false` 表示走自动发现；`auto_sources` 为自动发现的全部可用源（用于对比"哪些源没被纳入"）
-- **说明**: 只返回分布在 ≥2 个源的模型；人工配置过的模型即使只剩 1 个源也返回
+- **字段说明**: `model` 为**聚合名**（客户端请求用）；`sources` 为生效源顺序（兼容旧前端）；`members` 为 `{upstream, model}`，其中 `model` 是该源里的**真实模型名**（支持异名）；`configured=false` 表示走自动发现；`auto_sources` 为自动发现的同名源
+- **说明**: 自动发现只返回严格同名且分布在 ≥2 个源的模型；人工配置过的聚合组始终返回（含异名成员），即使只剩 1 个源
 
-### 4.25 保存同名模型聚合配置（CH-019）
+### 4.25 保存聚合配置（CH-019 / CH-020）
 
 - **路径**: `PUT /admin/api/model-groups?model={model_name}`
 - **鉴权**: JWT
@@ -333,18 +337,53 @@ Header: `Authorization: Bearer <token>`
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| upstreams | array | 是 | `[{upstream, weight}]`，顺序即候选优先级，不可为空 |
-| enabled | bool | 否 | 默认 true；false = 关闭同名聚合，退化为取第一个可用源直连 |
+| upstreams | array | 是 | `[{upstream, model?, weight}]`，**顺序即候选优先级**，不可为空 |
+| upstreams[].model | string | 否 | 该源里的真实模型名；**不填表示与聚合名同名**（纯同名聚合） |
+| enabled | bool | 否 | 默认 true；false = 关闭聚合，退化为取第一个可用成员直连 |
 
 - **出参**: `{ "ok": true, "model": "..." }`
 - **错误码**: 400 model 缺失；404 上游源不存在；422 upstreams 为空
 
-### 4.26 删除同名模型聚合配置（CH-019）
+### 4.26 删除聚合配置（CH-019）
 
 - **路径**: `DELETE /admin/api/model-groups?model={model_name}`
 - **鉴权**: JWT
-- **行为**: 删除人工配置，该模型回到自动发现
+- **行为**: 删除人工配置，该聚合名回到自动发现
 - **出参**: `{ "ok": true, "model": "..." }`
+
+### 4.26.1 异名聚合建议（CH-020）
+
+- **路径**: `GET /admin/api/model-groups/suggestions`
+- **鉴权**: JWT
+- **行为**: 按「去 `provider/` 前缀 → 转小写 → `.` `_` 视为 `-` → 压缩重复分隔符」归一化模型名，聚类出**疑似同一模型**
+- **过滤条件**: 分布在 ≥2 个源、成员名不完全相同、尚未人工配置
+- **出参**:
+
+```json
+{
+  "suggestions": [
+    {
+      "suggested_name": "deepseek-v4-1-flash",
+      "normalized": "deepseek-v4-1-flash",
+      "members": [
+        {"upstream": "buddy", "upstream_name": "Buddy 池", "model": "buddy/deepseek-v4.1-flash"},
+        {"upstream": "loomy", "upstream_name": "Loomy 池", "model": "loomy/DeepSeek-V4.1-Flash"},
+        {"upstream": "trae",  "upstream_name": "Trae 池",  "model": "trae/deepseek-v4.1-flash"}
+      ]
+    }
+  ]
+}
+```
+
+- **用法**: 前端「一键合并」直接调 `PUT /admin/api/model-groups?model={suggested_name}`，把 `members` 原样作为 `upstreams` 提交
+
+### 4.26.2 某源已配置模型（CH-020）
+
+- **路径**: `GET /admin/api/model-groups/source-models?upstream={upstream_id}`
+- **鉴权**: JWT
+- **出参**: `{ "upstream": "buddy", "models": [{"name": "buddy/deepseek-v4.1-flash", "enabled": true}] }`
+- **用途**: 「添加异名成员」时下拉选择该源的真实模型名
+- **错误码**: 404 上游源不存在
 
 ### 4.27 用量汇总（CH-019）
 
@@ -567,7 +606,8 @@ Header: `Authorization: Bearer <token>`
 | 延迟与健康状态 | GET /status | （内存状态） |
 | 聚合名管理 | GET/PUT /admin/api/aggregated-names | agg_aggregated_name |
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
-| 同名聚合人工配置 | GET/PUT/DELETE /admin/api/model-groups | agg_model_group |
+| 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_model_group |
+| 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups；GET .../suggestions；GET .../source-models | agg_model_group |
 | 单模型启用/禁用 | PATCH /admin/api/upstreams/{id}/models | up_upstream(models) |
 | 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
 | 用量三层统计 | GET /admin/api/usage/summary\|by-model\|by-key\|logs | log_usage |
@@ -586,3 +626,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-08-11 | CH-009/010：新增入站端点 POST /v1/messages（Anthropic 格式，兼容 x-api-key 鉴权）与 POST /v1/responses（Responses 格式，Codex 可用）；内部统一 openai chat 中间格式，双向自动转换（含流式），3×3 协议矩阵收齐 | AI+用户 |
 | 2026-08-12 | CH-018：三入站错误统一为各协议标准格式；messages/responses 入站补图片块映射（image/input_image → image_url）；推理模型 reasoning 映射（anthropic thinking / responses reasoning item）；新增 2.3 Responses 契约章节 | AI+用户 |
 | 2026-10-16 | CH-019：新增 4.7.3 单模型启停、4.7.4 模型重排、4.24~4.26 同名聚合组三端点、4.27~4.31 用量四端点+flush；/v1/models 过滤模型级禁用；503 错误信息带 `model@upstream` | AI+用户 |
+| 2026-10-16 | CH-020：聚合组成员支持异名（`upstreams[].model`）；新增 4.26.1 归一化建议、4.26.2 某源已配置模型两端点；4.24/4.25 补充 `members` 字段说明 | AI |

@@ -55,7 +55,13 @@ const router = createRouter({
           path: 'aggregated',
           name: 'Aggregated',
           component: () => import('@/views/Aggregated.vue'),
-          meta: { title: '聚合模型名', icon: 'Collection' },
+          meta: { title: '聚合模型', icon: 'Collection' },
+        },
+        {
+          path: 'route-params',
+          name: 'RouteParams',
+          component: () => import('@/views/RouteParams.vue'),
+          meta: { title: '路由参数', icon: 'Zap' },
         },
         {
           path: 'usage',

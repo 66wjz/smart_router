@@ -20,6 +20,8 @@ router = APIRouter(prefix="/admin/api", tags=["admin-model-groups"])
 
 class GroupSource(BaseModel):
     upstream: str
+    # 该上游源里的真实模型名；为空表示与聚合名同名（纯同名聚合）
+    model: str | None = None
     weight: int = 1
 
 
@@ -68,3 +70,82 @@ async def delete_model_group(model: str, request: Request, _=Depends(check_auth)
         raise HTTPException(400, "model 必填")
     svc.delete_model_group(model)
     return {"ok": True, "model": model}
+
+
+# ------------------------------------------------------------
+# 归一化建议：把不同前缀/大小写/分隔符的同一模型识别为一组
+# ------------------------------------------------------------
+
+def _normalize_model_name(name: str) -> str:
+    """归一化：去掉 `provider/` 前缀，统一小写，把 . _ 视作 -，压缩多余分隔符
+    例：buddy/deepseek-v4.1-flash / loomy/DeepSeek-V4.1-Flash / trae/deepseek-v4.1-flash
+        → deepseek-v4-1-flash
+    """
+    base = (name or "").strip().split("/")[-1]
+    base = base.lower().replace(".", "-").replace("_", "-")
+    while "--" in base:
+        base = base.replace("--", "-")
+    return base.strip("-")
+
+
+@router.get("/model-groups/suggestions")
+async def suggest_model_groups(request: Request, _=Depends(check_auth)):
+    """扫描所有上游模型，按归一化名聚类，返回"疑似同一模型"的建议组
+    只返回分布在 >=2 个源、且当前尚未人工配置的分组，供用户一次性确认合并。"""
+    cfg = request.app.state.config
+    configured = cfg.get_model_groups()
+
+    # 归一化名 → [{upstream, upstream_name, model}]
+    buckets: dict[str, list[dict]] = {}
+    for u in cfg.upstreams:
+        uid = u.get("upstream_id", "")
+        if not cfg.is_upstream_enabled(uid):
+            continue
+        for m in u.get("models") or []:
+            name = m.get("name") if isinstance(m, dict) else str(m)
+            if not name or not cfg.is_model_enabled(uid, name):
+                continue
+            key = _normalize_model_name(name)
+            if not key:
+                continue
+            buckets.setdefault(key, []).append({
+                "upstream": uid,
+                "upstream_name": u.get("name", uid),
+                "model": name,
+            })
+
+    suggestions = []
+    for key, members in buckets.items():
+        upstreams_in_group = {m["upstream"] for m in members}
+        if len(upstreams_in_group) < 2:
+            continue
+        distinct_models = {m["model"] for m in members}
+        # 完全同名的不算"异名建议"，交给自动发现即可
+        if len(distinct_models) < 2:
+            continue
+        # 已经人工配置过的（任一成员名作为聚合名）就跳过
+        if any(name in configured for name in distinct_models) or key in configured:
+            continue
+        suggestions.append({
+            "suggested_name": key,
+            "normalized": key,
+            "members": members,
+        })
+
+    suggestions.sort(key=lambda s: (-len(s["members"]), s["suggested_name"]))
+    return {"suggestions": suggestions}
+
+
+@router.get("/model-groups/source-models")
+async def list_source_models(request: Request, upstream: str, _=Depends(check_auth)):
+    """某上游源的已配置模型（供"添加异名成员"时下拉选择）"""
+    cfg = request.app.state.config
+    upstream_obj = cfg.get_upstream(upstream)
+    if not upstream_obj:
+        raise HTTPException(404, f"上游源 {upstream} 不存在")
+    models = [
+        {"name": m.get("name"), "enabled": bool(m.get("enabled", True))}
+        for m in (upstream_obj.get("models") or [])
+        if isinstance(m, dict) and m.get("name")
+    ]
+    return {"upstream": upstream, "models": models}

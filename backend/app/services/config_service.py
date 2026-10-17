@@ -152,11 +152,16 @@ class ConfigService:
     # ---------- 同名模型聚合组（CH-019 二期） ----------
 
     def list_model_groups(self) -> list[dict]:
-        """列出所有同名多源模型：自动发现结果 + 人工配置（若有）
-        只返回分布在 >=2 个源的模型；人工配置过的即使只剩 1 个源也返回（方便用户恢复/关闭）"""
+        """列出所有聚合组：自动发现结果 + 人工配置（若有）
+        - 自动发现：只返回同名且分布在 >=2 个源的模型
+        - 人工配置：始终返回（含异名成员），即使只剩 1 个源
+        每项：{model(聚合名), sources, members, enabled, configured, auto_sources}
+        - sources: 生效的上游源顺序（兼容旧前端）
+        - members: [{upstream, model}]，model 为该源真实模型名（支持异名）
+        """
         configured = self.config.get_model_groups()
 
-        # 模型名 → 自动发现的可用源
+        # 聚合名 → 自动发现的可用源（严格同名）
         discovered: dict[str, list[str]] = {}
         for u in self.config.upstreams:
             uid = u.get("upstream_id", "")
@@ -176,14 +181,18 @@ class ConfigService:
             if conf is None and len(auto_sources) < 2:
                 continue  # 未人工配置且只有单源 → 不是聚合组，不展示
             if conf is not None:
-                order = [s["upstream"] for s in conf.get("upstreams", [])]
+                members = [
+                    {"upstream": s["upstream"], "model": s.get("model") or name}
+                    for s in conf.get("upstreams", [])
+                ]
                 enabled = bool(conf.get("enabled", True))
             else:
-                order = list(auto_sources)
+                members = [{"upstream": uid, "model": name} for uid in auto_sources]
                 enabled = True
             groups.append({
                 "model": name,
-                "sources": order,
+                "sources": [m["upstream"] for m in members],
+                "members": members,
                 "enabled": enabled,
                 "configured": conf is not None,
                 "auto_sources": auto_sources,

@@ -7,13 +7,9 @@
           <BaseIcon name="cpu" :size="16" color="#fff" />
         </div>
         <span>Smart Router</span>
-        <span class="brand-sub">v5.1 · 管理后台</span>
+        <span class="brand-sub">v5.2 · 管理后台</span>
       </div>
       <div class="top-nav-right">
-        <BaseButton variant="ghost" size="sm" :disabled="reloading" @click="handleReload">
-          <BaseIcon name="refresh-cw" :size="14" />
-          热重载
-        </BaseButton>
         <div class="user-dropdown-wrapper">
           <BaseButton variant="icon" class="user-trigger" @click="toggleUserMenu">
             <div class="user-avatar">A</div>
@@ -83,7 +79,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseFormGroup from '@/components/base/BaseFormGroup.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { useUserStore } from '@/stores/user'
-import { changePassword, reloadConfig } from '@/api/common'
+import { changePassword } from '@/api/common'
 
 const route = useRoute()
 const router = useRouter()
@@ -105,14 +101,22 @@ const sidebarGroups = [
     collapsible: true,
     items: [
       { key: 'rules', label: '路由规则', icon: 'sliders-horizontal', path: '/rules' },
-      { key: 'aggregated', label: '聚合模型名', icon: 'collection', path: '/aggregated' },
+      { key: 'aggregated', label: '聚合模型', icon: 'collection', path: '/aggregated' },
       { key: 'latency', label: '延迟面板', icon: 'activity', path: '/latency' },
+      { key: 'route-params', label: '路由参数', icon: 'zap', path: '/route-params' },
+    ],
+  },
+  {
+    label: '统计',
+    icon: 'bar-chart',
+    collapsible: true,
+    items: [
+      { key: 'usage', label: '用量统计', icon: 'bar-chart', path: '/usage' },
     ],
   },
   {
     label: '',
     items: [
-      { key: 'usage', label: '用量统计', icon: 'bar-chart', path: '/usage' },
       { key: 'settings', label: '系统设置', icon: 'settings', path: '/settings' },
     ],
   },
@@ -155,18 +159,6 @@ async function handleLogout() {
   }
   userStore.logout()
   router.push('/login')
-}
-
-// ---- 热重载 ----
-const reloading = ref(false)
-async function handleReload() {
-  reloading.value = true
-  try {
-    await reloadConfig()
-    ElMessage.success('配置已热重载')
-  } finally {
-    reloading.value = false
-  }
 }
 
 // ---- 修改密码 ----

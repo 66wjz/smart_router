@@ -569,11 +569,25 @@ function initModelSortable(u: any) {
     handle: '.drag-handle',
     animation: 150,
     ghostClass: 'drag-ghost',
+    // 拖拽时显示插入位置指示线
+    fallbackTolerance: 3,
+    // 只允许在本列内排序，禁止拖到其他上游源的列表（避免 id 串台导致 404）
+    group: { name: `models-${u.id}`, pull: false, put: false },
     // 折叠状态下只显示前 N 行，拖拽会打乱全量顺序 → 折叠时禁用
     disabled: (modelsByUpstream[u.id] || []).length > COLLAPSE_THRESHOLD && !modelExpanded[u.id],
     onEnd: async (evt) => {
-      const el = evt.from as HTMLElement
-      const domOrder = Array.from(el.querySelectorAll('.model-row'))
+      const fromEl = evt.from as HTMLElement
+      const toEl = evt.to as HTMLElement
+      const fromUid = fromEl.dataset.sortableUpstream || ''
+      const toUid = toEl.dataset.sortableUpstream || ''
+      // 跨源拖拽：Sortable 已把节点挪出原列（即使目标列不接受），直接重新加载数据复原
+      if (fromUid !== toUid || toUid !== u.id) {
+        await load()
+        return
+      }
+      // 未发生位置变化（原地放下）
+      if ((evt.oldIndex ?? -1) === (evt.newIndex ?? -1)) return
+      const domOrder = Array.from(toEl.querySelectorAll('.model-row'))
         .map((n) => (n as HTMLElement).dataset.model || '')
         .filter(Boolean)
       const all = [...(modelsByUpstream[u.id] || [])]
@@ -998,7 +1012,17 @@ onMounted(load)
   cursor: not-allowed;
 }
 .drag-ghost {
-  opacity: 0.4;
+  opacity: 0.35;
+  background: var(--accent-blue-muted, rgba(64, 158, 255, 0.12)) !important;
+  border: 1px dashed var(--accent-blue, #409eff) !important;
+}
+/* 拖拽中的行加浮起阴影，便于识别 */
+.model-row.sortable-chosen {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+/* 插入位置指示线：用 drop 位置的前一条边框高亮模拟 */
+.model-row.sortable-ghost {
+  border-top: 2px solid var(--accent-blue, #409eff) !important;
 }
 .model-name {
   font-family: var(--font-mono, ui-monospace, monospace);
