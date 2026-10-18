@@ -95,7 +95,7 @@
             <span v-for="p in points" :key="'x' + p.label">{{ p.label }}</span>
           </div>
         </div>
-        <div v-else class="empty-tip">近 7 天暂无请求</div>
+        <BaseEmptyState v-else compact description="近 7 天暂无请求" />
       </BaseSection>
 
       <BaseSection variant="card" title="上游源贡献占比">
@@ -120,7 +120,7 @@
             </div>
           </div>
         </div>
-        <div v-else class="empty-tip">近 7 天暂无上游用量</div>
+        <BaseEmptyState v-else compact description="近 7 天暂无上游用量" />
       </BaseSection>
     </div>
 
@@ -167,7 +167,7 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-tip">暂无上游源，请先到「上游源管理」添加</div>
+      <BaseEmptyState v-else description="暂无上游源，请先到「上游源管理」添加" />
     </BaseSection>
 
     <!-- ⑤ 聚合组概览 -->
@@ -201,7 +201,7 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-tip">暂无聚合组（同名模型分布在 2 个以上源时自动出现）</div>
+      <BaseEmptyState v-else description="暂无聚合组（同名模型分布在 2 个以上源时自动出现）" />
     </BaseSection>
 
     <!-- ⑥ 需要关注 -->
@@ -223,6 +223,7 @@ import { useRouter } from 'vue-router'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import { getDashboard } from '@/api/common'
 import { listUpstreams } from '@/api/upstreams'
 import { listApiKeys } from '@/api/apiKeys'

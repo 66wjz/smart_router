@@ -1,5 +1,9 @@
 <template>
-  <div>
+  <div v-loading="loading">
+    <BaseNotice v-if="loadFailed" variant="error" title="配置加载失败"
+      text="请检查后端服务是否正常，然后点击下方按钮重试。" />
+    <BaseButton v-if="loadFailed" variant="primary" style="margin-bottom: 16px" @click="load">重新加载</BaseButton>
+
     <!-- 全局容错 -->
     <BaseSection variant="card" title="全局容错">
       <BaseHint block style="margin-bottom: 12px"
@@ -128,6 +132,7 @@ import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
+import BaseNotice from '@/components/base/BaseNotice.vue'
 import { reloadConfig } from '@/api/common'
 import { listGroups, updateGroups } from '@/api/groups'
 import {
@@ -139,6 +144,8 @@ import {
   saveSmartRetryConfig,
 } from '@/api/settings'
 
+const loading = ref(false)
+const loadFailed = ref(false)
 const reloading = ref(false)
 const saving = ref(false)
 const savingGroups = ref(false)
@@ -150,17 +157,26 @@ const smartRetryForm = reactive<any>({ extra_attempts: 2, backoff_ms: [500, 1500
 const smartRetryBackoffText = ref('500, 1500')
 
 async function load() {
-  const [groups, retry, failover, smartRetry]: any = await Promise.all([
-    listGroups(),
-    getRetryConfig(),
-    getFailoverConfig(),
-    getSmartRetryConfig(),
-  ])
-  groupsForm.value = (groups.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
-  Object.assign(retryForm, retry)
-  Object.assign(failoverForm, failover)
-  Object.assign(smartRetryForm, smartRetry)
-  smartRetryBackoffText.value = (smartRetryForm.backoff_ms || []).join(', ')
+  loading.value = true
+  loadFailed.value = false
+  try {
+    const [groups, retry, failover, smartRetry]: any = await Promise.all([
+      listGroups(),
+      getRetryConfig(),
+      getFailoverConfig(),
+      getSmartRetryConfig(),
+    ])
+    groupsForm.value = (groups.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
+    Object.assign(retryForm, retry)
+    Object.assign(failoverForm, failover)
+    Object.assign(smartRetryForm, smartRetry)
+    smartRetryBackoffText.value = (smartRetryForm.backoff_ms || []).join(', ')
+  } catch {
+    // 拦截器已弹出具体错误，这里只标记失败态，避免整页空白且无从下手
+    loadFailed.value = true
+  } finally {
+    loading.value = false
+  }
 }
 
 async function handleReload() {

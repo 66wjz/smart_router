@@ -9,7 +9,8 @@
       text="模板 = 一套可复用的探测节奏（间隔 / 慢阈值 / 排序 / 时段）。多个聚合挂同一模板后共用同一节奏，改模板即全部生效；挂模板的聚合不再使用自己的探测参数。"
     />
 
-    <div v-if="!templates.length" class="empty-tip">还没有探测模板。可以先建一个「标准-全天」模板，再挂到常用聚合上。</div>
+    <BaseEmptyState v-if="!templates.length" compact
+      description="还没有探测模板。可以先建一个「标准-全天」模板，再挂到常用聚合上。" />
 
     <el-table v-else :data="templates" size="small" stripe>
       <el-table-column label="模板名" min-width="160">
@@ -56,6 +57,7 @@
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseSection from '@/components/base/BaseSection.vue'
 import { describeSchedule } from './schedule'
 import type { ProbeTemplate } from '@/api/aggregations'

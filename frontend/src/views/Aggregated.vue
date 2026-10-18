@@ -40,9 +40,8 @@
           <BaseNotice
             text="两类聚合统一管理：固定成员（可跨源、可异名）由你指定候选；规则聚合的候选由「路由规则」页在运行时按请求内容匹配，探测时会覆盖全部规则候选的并集。" />
 
-          <div v-if="!aggregations.length" class="empty-tip">
-            当前没有聚合。同一模型名只存在于一个源时不构成聚合；异名模型可手动创建。
-          </div>
+          <BaseEmptyState v-if="!aggregations.length" compact
+            description="当前没有聚合。同一模型名只存在于一个源时不构成聚合；异名模型可手动创建。" />
 
           <AggregationCard
             v-for="g in aggregations"
@@ -115,7 +114,7 @@
         <el-table-column prop="upstream_name" label="上游源" width="140" />
         <el-table-column prop="model" label="真实模型名" min-width="240" />
       </el-table>
-      <div v-if="!ruleUnits.length" class="empty-tip">当前路由规则没有任何候选</div>
+      <BaseEmptyState v-if="!ruleUnits.length" compact description="当前路由规则没有任何候选" />
       <template #footer>
         <BaseButton variant="ghost" @click="ruleVisible = false">关闭</BaseButton>
       </template>
@@ -181,6 +180,7 @@ import BaseHint from '@/components/base/BaseHint.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import { confirmAction, confirmDanger } from '@/components/base/BaseConfirm'
 import ProbeSettingsForm, { type ProbeFormModel } from '@/components/probe/ProbeSettingsForm.vue'
 import AggregationCard from '@/components/aggregation/AggregationCard.vue'
