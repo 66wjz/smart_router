@@ -1,0 +1,148 @@
+/* ==========================================
+   全局工具类 / 图标尺寸约束 / 动画
+   CH-026：从 style.css 拆出
+   ========================================== */
+
+/* ==========================================
+   Animations
+   ========================================== */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.is-loading {
+  animation: spin 1s linear infinite;
+}
+
+/* ==========================================
+   CRITICAL: Global SVG/Icon Size Safety
+   ========================================== */
+/* Prevent any SVG from ever becoming huge */
+svg:not([width]) {
+  width: 1em !important;
+}
+
+/* Constrain all Element Plus icons */
+.el-icon {
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.el-icon svg {
+  width: 16px !important;
+  height: 16px !important;
+  max-width: 16px !important;
+  max-height: 16px !important;
+  display: block;
+}
+
+/* Button icons should be even smaller */
+.el-button .el-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.el-button .el-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Input prefix/suffix icons */
+.el-input__prefix .el-icon,
+.el-input__suffix .el-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.el-input__prefix .el-icon svg,
+.el-input__suffix .el-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Table column icons */
+.el-table .el-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.el-table .el-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Tag icons */
+.el-tag .el-icon {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+/* Select arrow icon */
+.el-select .el-input__suffix .el-icon {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+/* DatePicker icon */
+.el-date-editor .el-input__prefix .el-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Also constrain any standalone SVG that might be unstyled */
+.el-button svg:not([width]) {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.el-table svg:not([width]) {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* ===== SVG SIZE ENFORCEMENT ===== */
+/* 图标类 SVG 默认 14px；显式声明尺寸的（如趋势图 .trend-svg）不受影响 */
+svg:not(.empty-state svg):not(.trend-svg):not([data-free-size]) {
+  width: 14px !important;
+  height: 14px !important;
+  max-width: 14px !important;
+  max-height: 14px !important;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* ==========================================
+   ELEMENT PLUS MESSAGE Z-INDEX FIX
+   ========================================== */
+.el-message {
+  z-index: var(--z-toast) !important;
+}
+
+.el-notification {
+  z-index: var(--z-toast) !important;
+}
+
+.el-message-box {
+  z-index: var(--z-select-dropdown) !important;
+}

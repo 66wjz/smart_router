@@ -1,0 +1,373 @@
+/* ==========================================
+   Element Plus 组件样式覆盖
+   CH-026：从 style.css 拆出
+   ========================================== */
+
+/* Buttons */
+.el-button--default {
+  --el-button-bg-color: #ffffff;
+  --el-button-border-color: var(--border-default);
+  --el-button-text-color: var(--text-secondary);
+  --el-button-hover-bg-color: var(--bg-hover);
+  --el-button-hover-border-color: var(--border-emphasis);
+  --el-button-hover-text-color: var(--text-primary);
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--accent-blue);
+  --el-button-border-color: var(--accent-blue);
+  --el-button-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--accent-blue-hover);
+  --el-button-hover-border-color: var(--accent-blue-hover);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-disabled-bg-color: var(--accent-blue);
+  --el-button-disabled-border-color: var(--accent-blue);
+  --el-button-disabled-text-color: rgba(255,255,255,0.6);
+}
+
+.el-button--danger {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-text-color: var(--accent-red);
+  --el-button-hover-bg-color: var(--accent-red-muted);
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--accent-red);
+}
+
+.el-button--danger.is-text,
+.el-button--danger.is-link {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-text-color: var(--accent-red);
+  --el-button-hover-bg-color: var(--accent-red-muted);
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--accent-red);
+}
+
+.el-button.is-text {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+}
+
+.el-button.is-text:hover {
+  background-color: var(--bg-hover);
+}
+
+/* Input */
+.el-input__wrapper {
+  background-color: var(--bg-base) !important;
+  box-shadow: 0 0 0 1px var(--border-default) inset !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--border-emphasis) inset !important;
+}
+
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--accent-blue) inset !important;
+}
+
+.el-input__inner {
+  color: var(--text-primary) !important;
+}
+
+.el-input__inner::placeholder {
+  color: var(--text-tertiary) !important;
+}
+
+.el-input__prefix .el-icon {
+  color: var(--text-tertiary);
+}
+
+.el-textarea__inner {
+  background-color: var(--bg-base) !important;
+  box-shadow: 0 0 0 1px var(--border-default) inset !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--accent-blue) inset !important;
+}
+
+.el-textarea__inner::placeholder {
+  color: var(--text-tertiary) !important;
+}
+
+/* Select dropdown */
+.el-select-dropdown {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+.el-select-dropdown__item {
+  color: var(--text-primary);
+}
+
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover {
+  background-color: var(--bg-hover);
+}
+
+.el-select-dropdown__item.selected {
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+
+/* Date Picker */
+.el-picker-panel {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-date-table td.available:hover .el-date-table-cell__text {
+  background-color: var(--bg-hover) !important;
+}
+
+.el-date-table td.current:not(.disabled) .el-date-table-cell__text {
+  background-color: var(--accent-blue) !important;
+  color: #fff !important;
+}
+
+.el-date-table td.today .el-date-table-cell__text {
+  color: var(--accent-blue) !important;
+}
+
+/* Card */
+.el-card {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.el-card__header {
+  background-color: transparent !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary);
+  padding: 12px 20px;
+}
+
+.el-card__body {
+  color: var(--text-primary);
+  padding: 20px;
+}
+
+/* Menu */
+.el-menu {
+  background-color: transparent !important;
+  border-right: none !important;
+}
+
+.el-menu-item {
+  color: var(--text-secondary) !important;
+  background-color: transparent !important;
+  border-radius: var(--radius-sm);
+  margin: 2px 0;
+}
+
+.el-menu-item:hover {
+  background-color: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-menu-item.is-active {
+  background-color: var(--accent-blue-muted) !important;
+  color: var(--accent-blue) !important;
+}
+
+/* Tabs */
+.el-tabs__item {
+  color: var(--text-secondary) !important;
+  font-size: 13px;
+}
+
+.el-tabs__item.is-active {
+  color: var(--accent-blue) !important;
+}
+
+.el-tabs__item:hover {
+  color: var(--text-primary) !important;
+}
+
+.el-tabs__active-bar {
+  background-color: var(--accent-blue) !important;
+}
+
+.el-tabs__nav-wrap::after {
+  background-color: var(--border-subtle) !important;
+}
+
+/* Table */
+.el-table {
+  --el-table-bg-color: var(--bg-base) !important;
+  --el-table-tr-bg-color: var(--bg-base) !important;
+  --el-table-header-bg-color: var(--bg-elevated) !important;
+  --el-table-border-color: var(--border-subtle) !important;
+  --el-table-text-color: var(--text-primary) !important;
+  --el-table-header-text-color: var(--text-secondary) !important;
+  --el-table-row-hover-bg-color: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.el-table th.el-table__cell {
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-tertiary) !important;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Dialog */
+.el-dialog {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg);
+}
+
+.el-dialog__title {
+  color: var(--text-primary) !important;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.el-dialog__headerbtn .el-dialog__close {
+  color: var(--text-tertiary);
+}
+
+.el-dialog__headerbtn:hover .el-dialog__close {
+  color: var(--accent-blue);
+}
+
+.el-dialog__body {
+  color: var(--text-primary);
+}
+
+.el-overlay {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(4px);
+}
+
+/* Form */
+.el-form-item__label {
+  color: var(--text-secondary) !important;
+  font-weight: 500;
+}
+
+.el-form-item__error {
+  color: var(--accent-red);
+}
+
+/* Tag */
+.el-tag {
+  --el-tag-bg-color: var(--bg-elevated);
+  --el-tag-border-color: var(--border-subtle);
+  --el-tag-text-color: var(--text-secondary);
+  border-radius: 99px;
+}
+
+.el-tag--success {
+  --el-tag-bg-color: var(--accent-green-muted);
+  --el-tag-border-color: rgba(0, 180, 42, 0.2);
+  --el-tag-text-color: var(--accent-green);
+}
+
+.el-tag--info {
+  --el-tag-bg-color: var(--bg-elevated);
+  --el-tag-border-color: var(--border-subtle);
+  --el-tag-text-color: var(--text-tertiary);
+}
+
+.el-tag--danger {
+  --el-tag-bg-color: var(--accent-red-muted);
+  --el-tag-border-color: rgba(245, 63, 63, 0.2);
+  --el-tag-text-color: var(--accent-red);
+}
+
+.el-tag--warning {
+  --el-tag-bg-color: var(--accent-amber-muted);
+  --el-tag-border-color: rgba(255, 125, 0, 0.2);
+  --el-tag-text-color: var(--accent-amber);
+}
+
+/* Message */
+.el-message {
+  --el-message-bg-color: var(--bg-base);
+  --el-message-border-color: var(--border-subtle);
+  --el-message-text-color: var(--text-primary);
+  background-color: var(--bg-base) !important;
+  border-color: var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+/* Empty */
+.el-empty__description {
+  color: var(--text-tertiary) !important;
+}
+
+/* Loading */
+.el-loading-mask {
+  background-color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.el-loading-spinner .el-loading-text {
+  color: var(--accent-blue) !important;
+}
+
+.el-loading-spinner .path {
+  stroke: var(--accent-blue) !important;
+}
+
+/* Message Box */
+.el-message-box {
+  background-color: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.el-message-box__title {
+  color: var(--text-primary) !important;
+}
+
+.el-message-box__content {
+  color: var(--text-primary) !important;
+}
+
+/* Switch */
+.el-switch {
+  --el-switch-off-color: #dee0e3;
+  --el-switch-on-color: var(--accent-blue);
+}
+
+/* Pagination */
+.el-pagination {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-bg-color: var(--bg-elevated);
+  --el-pagination-hover-color: var(--accent-blue);
+}
+
+.el-pager li {
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-sm);
+}
+
+.el-pager li:hover {
+  color: var(--accent-blue) !important;
+}
+
+.el-pager li.is-active {
+  background-color: var(--accent-blue) !important;
+  color: #fff !important;
+}

@@ -5,6 +5,9 @@
       <div v-if="title" class="base-notice-title">{{ title }}</div>
       <div class="base-notice-text"><slot>{{ text }}</slot></div>
     </div>
+    <button v-if="closable" class="base-notice-close" type="button" @click="visible = false">
+      <BaseIcon name="x" :size="14" />
+    </button>
   </div>
 </template>
 
@@ -54,6 +57,21 @@ const iconName = computed(() => ({
 .base-notice-body {
   flex: 1;
   min-width: 0;
+}
+.base-notice-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 2px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+.base-notice-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .base-notice-title {
   font-weight: 500;

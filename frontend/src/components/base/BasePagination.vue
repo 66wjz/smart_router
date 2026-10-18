@@ -1,5 +1,5 @@
 <template>
-  <div v-if="total > pageSize" class="base-pagination">
+  <div v-if="show" class="base-pagination">
     <el-pagination
       :current-page="page"
       :page-size="pageSize"
@@ -17,8 +17,11 @@ withDefaults(defineProps<{
   pageSize: number
   total: number
   layout?: string
+  /** 是否渲染（默认始终渲染，仅隐藏时由调用方传 false） */
+  show?: boolean
 }>(), {
   layout: 'prev, pager, next, total',
+  show: true,
 })
 
 const emit = defineEmits<{

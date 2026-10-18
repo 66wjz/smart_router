@@ -156,16 +156,13 @@
           <template #default="{ row }">{{ row.error_msg || '—' }}</template>
         </el-table-column>
       </el-table>
-      <div class="pager">
-        <el-pagination
-          v-model:current-page="logPage"
-          :page-size="logSize"
-          :total="logTotal"
-          layout="prev, pager, next, total"
-          size="small"
-          @current-change="loadLogs"
-        />
-      </div>
+      <BasePagination
+        :page="logPage"
+        :page-size="logSize"
+        :total="logTotal"
+        @update:page="logPage = $event"
+        @change="loadLogs"
+      />
     </BaseSection>
   </div>
 </template>
@@ -176,6 +173,7 @@ import BaseSection from '@/components/base/BaseSection.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
+import BasePagination from '@/components/base/BasePagination.vue'
 import { getUsageByKey, getUsageByUnit, getUsageLogs, getUsageByModel, getUsageSummary } from '@/api/usage'
 
 const range = ref('today')
@@ -275,10 +273,5 @@ onMounted(load)
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
-}
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
 }
 </style>

@@ -1,0 +1,156 @@
+/* ==========================================
+   设计令牌 + 基础重置
+   CH-026：从 style.css 拆出
+   ========================================== */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* Core palette */
+  --bg-deep: #f7f8fa;
+  --bg-base: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f0f2f5;
+  --bg-hover: #f5f6f8;
+  --bg-active: #ebeef2;
+
+  /* Borders */
+  --border-subtle: #e5e6eb;
+  --border-default: #dee0e3;
+  --border-emphasis: #c9cdd4;
+
+  /* Text */
+  --text-primary: #1f2329;
+  --text-secondary: #646a73;
+  --text-tertiary: #8f959e;
+  --text-inverse: #ffffff;
+
+  /* Accents */
+  --accent-blue: #3b82f6;
+  --accent-blue-hover: #2563eb;
+  --accent-blue-muted: #dbeafe;
+  --accent-purple: #7c3aed;
+  --accent-purple-muted: rgba(124, 58, 237, 0.08);
+  --accent-green: #00b42a;
+  --accent-green-muted: rgba(0, 180, 42, 0.08);
+  --accent-red: #f53f3f;
+  --accent-red-muted: rgba(245, 63, 63, 0.08);
+  --accent-amber: #ff7d00;
+  --accent-amber-muted: rgba(255, 125, 0, 0.08);
+
+  /* Chart（仪表盘 SVG 图表专用，独立于 UI 强调色，避免图表配色被界面主题牵动） */
+  --chart-line-1: var(--accent-blue);
+  --chart-line-2: var(--accent-purple);
+  --chart-fill-1: color-mix(in srgb, var(--chart-line-1) 26%, transparent);
+  --chart-fill-2: color-mix(in srgb, var(--chart-line-2) 26%, transparent);
+  --chart-fill-1-end: color-mix(in srgb, var(--chart-line-1) 0%, transparent);
+  --chart-cat-green: var(--accent-green);
+  --chart-cat-amber: var(--accent-amber);
+  --chart-cat-red: var(--accent-red);
+  --chart-cat-cyan: #06b6d4;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  --shadow-glow: 0 0 40px color-mix(in srgb, var(--accent-blue) 10%, transparent);
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* Transition */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+
+  /* Sidebar */
+  --sidebar-width: 240px;
+
+  /* Control Heights - 统一行内控件高度，确保一排齐平
+      default 与 Element Plus 默认高度(32px)一致，sm 用于列表操作区紧凑按钮 */
+  --control-height: 32px;       /* default 尺寸（与 el-input/el-select/el-button 对齐） */
+  --control-height-sm: 28px;    /* small 尺寸（列表操作区按钮） */
+  --control-height-lg: 44px;   /* large 尺寸 */
+
+  /* Z-Index Layers (由低到高，禁止硬编码数字) */
+  --z-base: 1;            /* 基础层：局部定位元素 */
+  --z-dropdown: 100;      /* 下拉菜单、日历选择器 */
+  --z-sticky: 500;        /* 粘性头部/侧栏 */
+  --z-modal: 2000;        /* 普通弹窗 */
+  --z-modal-nested: 2100; /* 弹窗内再弹出的弹窗 */
+  --z-select-dropdown: 3000; /* Select 下拉面板（需在弹窗之上） */
+  --z-toast: 9999;        /* Toast / Notification 消息提示（最顶层） */
+
+  /* Element Plus theme overrides */
+  --el-color-primary: #3b82f6;
+  --el-color-primary-light-3: #7b79ff;
+  --el-color-primary-light-5: #a8a7ff;
+  --el-color-primary-light-7: #d4d3ff;
+  --el-color-primary-light-8: #e8e7ff;
+  --el-color-primary-light-9: #f3f3ff;
+  --el-color-primary-dark-2: #4240cc;
+  --el-color-success: #00b42a;
+  --el-color-warning: #ff7d00;
+  --el-color-danger: #f53f3f;
+  --el-color-info: #8f959e;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-overlay: #ffffff;
+  --el-bg-color-page: #f7f8fa;
+  --el-text-color-primary: #1f2329;
+  --el-text-color-regular: #646a73;
+  --el-text-color-secondary: #8f959e;
+  --el-text-color-placeholder: #c9cdd4;
+  --el-border-color: #e5e6eb;
+  --el-border-color-light: #dee0e3;
+  --el-border-color-lighter: #e5e6eb;
+  --el-border-color-extra-light: #f0f2f5;
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color-light: #f7f8fa;
+  --el-fill-color: #f0f2f5;
+  --el-fill-color-dark: #e5e6eb;
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+
+  --el-font-size-base: 14px;
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+
+  --el-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --el-box-shadow-light: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --el-transition-duration: 0.25s;
+
+  --el-border-radius-base: 6px;
+}
+
+html {
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { color: var(--accent-blue-hover); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-emphasis); }
