@@ -844,6 +844,34 @@ Header: `Authorization: Bearer <token>`
 - **鉴权**: JWT
 - **配置字段**: max_attempts/response_timeout/first_chunk_timeout
 
+### 4.18.1 配置项 - 智能重试（CH-012）
+
+- **路径**: `GET /admin/api/config/smart-retry`
+- **路径**: `PUT /admin/api/config/smart-retry`
+- **鉴权**: JWT
+- **出参**（GET）:
+
+```json
+{ "extra_attempts": 2, "backoff_ms": [500, 1500], "jitter": 0.2 }
+```
+
+- **入参**（PUT）: 同上结构，字段均可选，未提供的字段沿用缺省值（后端与默认值合并返回）
+- **字段说明**:
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| extra_attempts | int | 2 | 在 Key 数之外追加的尝试次数（总预算 = Key 数 + 该值） |
+| backoff_ms | int[] | [500, 1500] | 同一 Key 重试前的退避毫秒序列，超出长度取最后一项 |
+| jitter | float | 0.2 | 退避抖动比例（±20%），0 表示不抖动 |
+
+- **语义**:
+  - 该组参数是**全局默认**，但只对「上游源开启 `smart_retry`」的源生效（源级开关见 4.x 上游源 CRUD 的 `smart_retry` 字段）
+  - 开关关闭时：行为退化为基础换 Key 逻辑（仅 401/403/429/超时/连接异常换 Key）
+  - 开关开启时：额外把 500/502/503/504 纳入可重试；同一 Key 重试前按 `backoff_ms` + `jitter` 退避
+- **出参**（PUT）: `{"ok": true}`
+- **存储**: `sys_setting` 键 `smart_retry`
+- **错误码**: 401 未鉴权；422 参数类型非法
+
 ### 4.19 配置项 - 故障转移
 
 - **路径**: `GET /admin/api/config/failover`
@@ -931,6 +959,7 @@ Header: `Authorization: Bearer <token>`
 | 用量按单元（号池核算） | GET /admin/api/usage/by-unit | log_usage(upstream_model) |
 | 延迟探测参数配置 | GET/PUT /admin/api/config/probe | sys_setting |
 | 重试参数配置 | GET/PUT /admin/api/config/retry | sys_setting |
+| 智能重试全局参数 | GET/PUT /admin/api/config/smart-retry | sys_setting(smart_retry) |
 | 故障转移参数配置 | GET/PUT /admin/api/config/failover | sys_setting |
 | 配置热重载 | POST /admin/api/reload | 全表 |
 

@@ -219,7 +219,6 @@ frontend/src/views/       # Dashboard / Upstreams / Rules / Pointers / ApiKeys /
 | [docs/变更记录.md](docs/变更记录.md) | 全部业务变更记录 |
 | [docs/_changes/](docs/_changes/) | 变更文档（已归档批次在 archived/） |
 | [.devflow/PLAN-多协议与分组管理.md](.devflow/PLAN-多协议与分组管理.md) | 协议矩阵规划（P0~P3） |
-| [config.example.yaml](config.example.yaml) | 配置模板（脱敏；复制为 config.yaml 后填真实值，config.yaml 不入库） |
 
 ## 流程管控
 

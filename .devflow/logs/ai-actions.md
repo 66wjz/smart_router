@@ -5,6 +5,15 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - CH-030 清理 v4 遗留 + 登记待办 + 补文档
+- 背景：CH-029 收尾列了 4 项遗留，用户逐项决策（部署脚本待部署时重写 / v4 代码删掉 / `auto_same_name` 登记待办 / 补 `smart-retry` 文档）
+- 删前依赖排查（铁律 2）：`backend/app/**` 与 `test/` 对根目录 `core`/`upstream`/`admin` 的 import 实测 0 处；`start.bat` 已在 CH-029 改指 `backend/run.py`；`config.example.yaml` 仅被 README 索引引用
+- 删除：11 个 git 跟踪文件（`router.py` / `core/` 6 py / `upstream/` 3 py / `admin/` 3 py / `.streamlit/config.toml` / `config.example.yaml`）+ 1 个未跟踪 `test_router.py`；**保留本地 `config.yaml`**（含真实配置、已 gitignore）
+- 删后验证：根目录 7 项全部不存在；空库 `seed.py` + `uvicorn` 启动成功；`npm run build` + `compileall` 通过；三套回归全通过；残留 grep 仅剩注释与 v5 自身 `app/api/v1/router.py` 路径
+- 待办登记：`docs/需求规格.md` 新增第九节「待完善事项」，9.1 详列 `auto_same_name` 的现状/实际行为/原承诺/影响/后续做法（避免以后误当已实现）
+- 文档补齐：`API契约.md` 4.18.1 `smart-retry`（字段表 + 默认值 + 开关语义 + 存储键 + 错误码）、`接口文档.md` 同步、API 总表补行；实测接口返回与文档一致
+- 关键判断：**删除 git 跟踪文件是安全可回退操作**（`git revert` 可完整恢复），但**未跟踪的本地 `config.yaml` 不能删**——它可能就是用户唯一的真实配置备份
+
 ### 2026-10-18 - CH-025 取证（问题 3 日志排查）
 - 背景：用户报「WebSocket error: Network IO error: error sending request for url (http://10.10.0.2:10002/v1/chat/completions) (HTTP Status: 500)」，要求先分析
 - 连接生产 10.10.0.2 取 journal 日志（paramiko/py3.12，SSH root）：journald 持久化（`/var/log/journal` 存在、Storage=auto），覆盖 9/21 至今；服务今早 09:57 重启，boot -1 日志完整保留 → **重启未冲掉日志**
