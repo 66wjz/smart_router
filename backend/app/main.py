@@ -22,7 +22,7 @@ from app.core.logging_setup import (
     setup_file_logging,
 )
 from app.core.probe import LatencyProbe
-from app.core.security import JWT_SECRET
+from app.core.security import get_jwt_secret
 from app.core.usage import UsageBuffer, current_api_key_id, current_api_key_name
 from app.services.auth_service import AuthService
 from app.services.config_service import ConfigService
@@ -179,6 +179,9 @@ async def startup():
     usage_buffer.start_worker()
     probe._init_models()
     asyncio.create_task(probe.run_loop(HTTP_CLIENT))
+    # CH-032：预热 JWT 密钥（环境变量 > sys_setting > 自动生成并落库）
+    # 放在配置加载之后，确保 sys_setting 已就绪
+    get_jwt_secret()
     log.info(f"Smart Router v5.2.0 启动，监听端口 {config.listen_port}")
 
 

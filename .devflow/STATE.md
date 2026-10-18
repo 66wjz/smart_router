@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-18（CH-031）
+- 上次更新：2026-10-18（CH-032）
 
 ## 补建说明
 
@@ -48,6 +48,7 @@
 | CH-029 | 部署前收尾（A 线 + B 线-小）：`seed.py` 补齐增量 01~08（修全新环境缺 `up_upstream_key` 表与 4 列导致启动崩溃）+ `drop_all` 补全 13 张表 + 支持 `SMART_ROUTER_DB` + 版本号统一 v5.2.0（run.py / STATE / pyproject / package.json）+ `start.bat` 指向 v5 + 数据库设计 SQL 清单与 sys_setting 键补全 + API契约修正拉取模型实现方式 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-030 | 清理 v4 遗留 + 登记待办 + 补文档（B 线-小）：删除 `router.py` / `core/` / `upstream/` / `admin/` / `.streamlit/` / `config.example.yaml` / `test_router.py`（实测 0 活引用）+ 需求规格新增第九节「待完善事项」登记 `auto_same_name` 开关缺口 + 补 `smart-retry` 的 API契约/接口文档 + README 文档索引清理 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-031 | 仓库迁移 GitHub + 历史隐私清洗（B 线-小）：`git-filter-repo` 替换历史中 CH-016 硬编码的管理员密码与客户端 Key（已双备份）+ 移除内嵌明文密码的 Gitee remote + 提交作者邮箱脱敏为 noreply + 全历史复扫 0 命中 + HEAD 树对象与清洗前一致 + 新远端 GitHub | ✅ 已实现（2026-10-18），已归档；**已 push GitHub，未部署** | 本地（已推送 GitHub） |
+| CH-032 | JWT 签名密钥动态化（B 线-小）：删除源码硬编码 `JWT_SECRET`，改为 `SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动自动生成并落库；进程内缓存 + 降级容错；旧密钥签发的 token 全部失效 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署**（升级后需重新登录一次） | 本地 |
 
 ## 历史经验参考
 

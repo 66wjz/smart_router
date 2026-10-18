@@ -113,6 +113,16 @@ systemd 服务：smart-router（:10002，Restart=always）
 
 增量部署脚本见 `test/deploy_*_incremental.py`（paramiko SFTP 上传 + 服务器侧 py_compile 预检 + systemctl 重启 + 健康验证）。
 
+#### 环境变量
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `SMART_ROUTER_DB` | `backend/smart_router.db` | 数据库文件路径（演示环境指向 `demo.db`） |
+| `FRONTEND_DIST` | `frontend_dist` | 前端构建产物目录 |
+| `SR_JWT_SECRET` | 自动生成 | 管理后台 JWT 签名密钥。**不设时首次启动自动生成并写入 `sys_setting.jwt_secret`**，重启后会话不失效；多实例部署必须显式设置同一值，否则 token 互不认可 |
+
+> 轮换 JWT 密钥：改 `SR_JWT_SECRET` 或更新 `sys_setting.jwt_secret` 后重启，所有已登录会话立即失效（需重新登录）。
+
 ## 使用方式
 
 ### 管理后台

@@ -5,6 +5,19 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - CH-032 JWT 签名密钥动态化
+- 背景：CH-031 推送 GitHub 时发现 `security.py` 硬编码 `JWT_SECRET`，用户明确「这种肯定不行」，要求先改完再谈部署
+- 先写变更文档再改代码（铁律 7：B 线必须先文档）：`docs/_changes/CH-032-JWT密钥动态化.md`
+- 现状排查（铁律 2：先定位）：全仓 `JWT_SECRET` 只有 4 处——`security.py` 定义 + 2 处使用 + `main.py:25` 的死导入（导入后从未使用）
+- 方案定级：`SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动 `secrets.token_urlsafe(48)` 自动生成并落库；**没有引入 python-dotenv**（项目无 .env 机制，为一行环境变量引依赖属过度设计）
+- 实现：`security.py` 新增 `get_jwt_secret()`（进程内缓存 + `threading.Lock`，防并发首次调用生成两个密钥）+ `reset_cache()`（测试模拟重启）+ 数据库不可用时降级为进程内随机密钥并 WARNING（服务不崩）；`main.py` 删死导入，startup 在配置加载后预热密钥
+- 验证（7 项单元 + 端到端）：自动生成落库长度 64 / 签发校验 / 模拟重启密钥不变且旧 token 有效 / **用旧硬编码密钥伪造的 token 返回 None** / 环境变量优先且旧 token 立即失效 / 数据库不可用降级 / 真实 uvicorn 重启后旧 token 仍 200
+- 回归：`verify_api_ch023` / `verify_rule_binding_ch024` / `verify_aggregation_ch023` / `verify_migration_ch023` 全通过；`compileall` 退出码 0
+- 文档同步：README 补环境变量表（含轮换说明）+ 需求规格移除 9.2 待完善项 + 架构设计 security.py 职责 + 数据库设计 3.9 新增 `jwt_secret` 键 + 变更记录 + STATE
+- 临时验证脚本用后即删（`test/_tmp_*_ch032.py`），不留在仓库
+- 关键判断：**「重启不踢人」是这次设计的核心约束**——如果每次重启随机生成新密钥，用户会频繁被登出，体验极差；落库持久化解决了这个矛盾
+- 未做：未 push、未部署
+
 ### 2026-10-18 - CH-031 仓库迁移 GitHub + Git 历史隐私清洗
 - 背景：用户推送前要求先做隐私审查。审查发现 git 历史里 `test/verify_prod_ch016.py` 在 CH-016 提交（`e2df186`）硬编码管理员密码与客户端 Key，CH-018（`521ac20`）虽已改环境变量但历史仍可翻阅；`.git/config` 的 remote URL 内嵌明文 Gitee 账号密码
 - 用户决策：①迁 GitHub、Gitee 仓库转私有；②推前先清干净；③不轮换凭据（局域网部署，外部不可达）
