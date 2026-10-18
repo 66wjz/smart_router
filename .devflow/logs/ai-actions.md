@@ -5,6 +5,17 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - CH-031 仓库迁移 GitHub + Git 历史隐私清洗
+- 背景：用户推送前要求先做隐私审查。审查发现 git 历史里 `test/verify_prod_ch016.py` 在 CH-016 提交（`e2df186`）硬编码管理员密码与客户端 Key，CH-018（`521ac20`）虽已改环境变量但历史仍可翻阅；`.git/config` 的 remote URL 内嵌明文 Gitee 账号密码
+- 用户决策：①迁 GitHub、Gitee 仓库转私有；②推前先清干净；③不轮换凭据（局域网部署，外部不可达）
+- 备份（铁律：破坏性操作先备份）：工作区文件副本 `E:\80-project_dev\04_smart-router-backup-20261018`（1.8 MB，排除 node_modules/.venv/dist/logs/__pycache__/*.db）+ `git bundle` 全 refs `E:\80-project_dev\04_smart-router-20261018.bundle`（0.9 MB）；两者都在项目目录外，**不会被误推**
+- 工具：`uv tool install git-filter-repo` → v2.47.0（venv 内无 pip，改用 uv tool）
+- 清洗：规则文件写在 `.git/replace-rules.txt`（不受 git 跟踪，避免自己泄露），`git filter-repo --replace-text` 把真实密码/Key 替换为 `CHANGE-ME-ADMIN-PASSWORD` / `sk-CHANGE-ME-CLIENT-KEY`；27 个提交 0.41s 重写完成；`origin` 按设计被移除
+- 验证：4 个敏感值（管理员密码 / 客户端 Key / Gitee 账号 / Gitee 密码）全历史 `git grep --fixed-strings` 扫描 **0 命中**；清洗前后 HEAD 树对象完全一致（`3957e9f3…`）→ 内容零变化；提交数 27 不变、`v5.1.0` 标签保留；`git status` 干净（294 文件）
+- 收尾：临时规则文件已删除；`.git/config` 只剩 core/user/branch，无任何 URL 与密码；失效的 `backup-before-clean` 分支删除（旧 hash 已随重写消失）
+- 关键判断：**历史清洗必须在 push 之前做**——一旦旧历史推到远端，force push 也难保干净（平台缓存 / 他人克隆 / fork）。本次恰好从未成功推送过含凭据的提交，成本最低
+- 未做：不配置 GitHub 远端、不 push、不部署（等用户提供仓库地址 + 明确授权）
+
 ### 2026-10-18 - CH-030 清理 v4 遗留 + 登记待办 + 补文档
 - 背景：CH-029 收尾列了 4 项遗留，用户逐项决策（部署脚本待部署时重写 / v4 代码删掉 / `auto_same_name` 登记待办 / 补 `smart-retry` 文档）
 - 删前依赖排查（铁律 2）：`backend/app/**` 与 `test/` 对根目录 `core`/`upstream`/`admin` 的 import 实测 0 处；`start.bat` 已在 CH-029 改指 `backend/run.py`；`config.example.yaml` 仅被 README 索引引用
