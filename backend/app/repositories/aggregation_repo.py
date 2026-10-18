@@ -39,6 +39,44 @@ class AggregationRepository(BaseRepository):
         return result
 
     @staticmethod
+    def _parse_bindings(raw) -> list[dict] | None:
+        """解析 rule_bindings（CH-024）
+
+        None / 空数组 = 全跟随（所有规则、每条规则的全部候选）
+        [{"rule": "默认对话", "candidates": null}]  → 只用该规则，候选全跟随
+        [{"rule": "视觉理解", "candidates": [{"upstream","model"}]}] → 显式候选子集
+        """
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw else None
+            except Exception:
+                return None
+        if not isinstance(raw, list) or not raw:
+            return None
+        result = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            rule_name = str(item.get("rule") or "").strip()
+            if not rule_name:
+                continue
+            cands = item.get("candidates")
+            if cands is None:
+                result.append({"rule": rule_name, "candidates": None})
+                continue
+            if not isinstance(cands, list):
+                continue
+            picked = []
+            for c in cands:
+                if isinstance(c, dict) and c.get("upstream"):
+                    picked.append({
+                        "upstream": str(c["upstream"]),
+                        "model": str(c["model"]) if c.get("model") else "",
+                    })
+            result.append({"rule": rule_name, "candidates": picked})
+        return result or None
+
+    @staticmethod
     def _parse_schedule(raw) -> dict:
         if isinstance(raw, str):
             try:
@@ -48,11 +86,11 @@ class AggregationRepository(BaseRepository):
         return raw if isinstance(raw, dict) else {}
 
     def list_all(self) -> dict[str, dict]:
-        """{聚合名: {kind, members, enabled, probe_enabled, template_id, ...}}；表不存在时返回空"""
+        """{聚合名: {kind, members, rule_bindings, enabled, probe_enabled, ...}}；表不存在时返回空"""
         try:
             rows = self.query(
-                f"SELECT name, kind, members, enabled, probe_enabled, template_id, sort_mode, "
-                f"interval_seconds, slow_threshold_seconds, schedule, remark "
+                f"SELECT name, kind, members, rule_bindings, enabled, probe_enabled, template_id, "
+                f"sort_mode, interval_seconds, slow_threshold_seconds, schedule, remark "
                 f"FROM {self.TABLE} ORDER BY kind, name"
             )
         except Exception:
@@ -63,6 +101,7 @@ class AggregationRepository(BaseRepository):
                 "name": r["name"],
                 "kind": r.get("kind") or "static",
                 "members": self._parse_members(r.get("members")),
+                "rule_bindings": self._parse_bindings(r.get("rule_bindings")),
                 "enabled": bool(r.get("enabled", 1)),
                 "probe_enabled": bool(r.get("probe_enabled", 0)),
                 "template_id": r.get("template_id"),
@@ -78,14 +117,16 @@ class AggregationRepository(BaseRepository):
         """新建或更新一个聚合（未提供的字段保持原值，用 COALESCE 实现部分更新语义）"""
         kind = data.get("kind") or "static"
         members = self._parse_members(data.get("members"))
+        bindings = self._parse_bindings(data.get("rule_bindings"))
         schedule = json.dumps(self._parse_schedule(data.get("schedule")), ensure_ascii=False)
         self.execute(
             f"INSERT INTO {self.TABLE} "
-            f"(name, kind, members, enabled, probe_enabled, template_id, sort_mode, "
+            f"(name, kind, members, rule_bindings, enabled, probe_enabled, template_id, sort_mode, "
             f" interval_seconds, slow_threshold_seconds, schedule, remark) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             f"ON CONFLICT(name) DO UPDATE SET "
-            f"kind = excluded.kind, members = excluded.members, enabled = excluded.enabled, "
+            f"kind = excluded.kind, members = excluded.members, "
+            f"rule_bindings = excluded.rule_bindings, enabled = excluded.enabled, "
             f"probe_enabled = excluded.probe_enabled, template_id = excluded.template_id, "
             f"sort_mode = excluded.sort_mode, interval_seconds = excluded.interval_seconds, "
             f"slow_threshold_seconds = excluded.slow_threshold_seconds, "
@@ -95,6 +136,7 @@ class AggregationRepository(BaseRepository):
                 name,
                 kind,
                 json.dumps(members, ensure_ascii=False),
+                json.dumps(bindings, ensure_ascii=False) if bindings else None,
                 1 if data.get("enabled", True) else 0,
                 1 if data.get("probe_enabled") else 0,
                 data.get("template_id"),
@@ -104,6 +146,24 @@ class AggregationRepository(BaseRepository):
                 schedule,
                 data.get("remark") or "",
             ),
+        )
+
+    def list_rule_bindings(self) -> dict[str, list[dict] | None]:
+        """所有 rule 聚合的绑定 {聚合名: bindings 或 None}（供规则变更时清理）"""
+        try:
+            rows = self.query(
+                f"SELECT name, rule_bindings FROM {self.TABLE} WHERE kind = 'rule' ORDER BY name"
+            )
+        except Exception:
+            return {}
+        return {r["name"]: self._parse_bindings(r.get("rule_bindings")) for r in rows}
+
+    def update_rule_bindings(self, name: str, bindings: list[dict] | None) -> None:
+        """只更新绑定字段（规则删除/改名时清理用，不动其他配置）"""
+        self.execute(
+            f"UPDATE {self.TABLE} SET rule_bindings = ?, updated_at = CURRENT_TIMESTAMP "
+            f"WHERE name = ?",
+            (json.dumps(bindings, ensure_ascii=False) if bindings else None, name),
         )
 
     def delete(self, name: str) -> bool:

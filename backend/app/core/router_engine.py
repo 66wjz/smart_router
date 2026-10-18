@@ -169,10 +169,15 @@ def get_ordered_candidates(
     health: "ModelHealth",
     estimated_tokens: int = 0,
     allowed_groups: set[str] | None = None,
+    aggregation: str | None = None,
 ) -> list[dict]:
-    """获取按优先级排序的候选模型列表（用于重试）。"""
+    """获取按优先级排序的候选模型列表（用于重试）。
+
+    aggregation 非空时，只用该 rule 聚合绑定的规则与候选（CH-024）；
+    为空或无绑定时沿用全部规则（兼容旧行为）。
+    """
     candidates = []
-    rules = app_config.rules
+    rules = app_config.bound_rules(aggregation)
     for rule in rules:
         if match_rule(rule, messages, body):
             candidates = rule.get("candidates", [])

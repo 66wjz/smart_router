@@ -63,8 +63,8 @@ class ConfigService:
     def get_rules(self) -> list[dict]:
         return self.config.rules
 
-    def set_rules(self, rules: list) -> None:
-        self.config.set_rules(rules)
+    def set_rules(self, rules: list) -> list[str]:
+        return self.config.set_rules(rules)
 
     # ---------- API Key ----------
 
@@ -317,10 +317,11 @@ class ConfigService:
 
         额外并入「自动发现的同名聚合」（未人工配置、同名模型分布在 >=2 个源），
         让升级后这类聚合仍在页面上可见可配，configured=false 标识其为自动发现。
+        CH-024：rule 聚合额外返回 rule_bindings / rule_binding_summary / stale_bindings。
         """
         entities = self.config.get_aggregations()
         templates = {t["id"]: t for t in self.config.get_probe_templates()}
-        rule_units = self.config.rule_candidate_units()
+        rules_by_name = {r.get("name"): r for r in self.config.rules}
 
         result = []
         for name, entity in sorted(entities.items(), key=lambda kv: (kv[1].get("kind") != "static", kv[0])):
@@ -353,14 +354,21 @@ class ConfigService:
                 "remark": entity.get("remark") or "",
             }
             if kind == "rule":
-                # rule 聚合没有成员列表：候选由路由规则在运行时匹配，探测对象是候选并集
-                item["member_count"] = len(rule_units)
-                item["rule_names"] = [
+                bindings = entity.get("rule_bindings")
+                units = self.config.rule_candidate_units(name)
+                item["rule_bindings"] = bindings
+                item["member_count"] = len(units)
+                item["rule_names"] = [b["rule"] for b in (bindings or [])] or [
                     r.get("name", "") for r in self.config.rules
                     if any(c.get("model") for c in r.get("candidates", []))
                 ]
+                item["rule_binding_summary"] = self._binding_summary(bindings, rules_by_name)
+                item["stale_bindings"] = self.config.rule_binding_issues(name)
             else:
+                item["rule_bindings"] = None
                 item["member_count"] = len(item["members"])
+                item["rule_binding_summary"] = None
+                item["stale_bindings"] = []
             result.append(item)
 
         # 自动发现但未落库的同名聚合（configured=false，探测参数取全局/旧表）
@@ -397,6 +405,26 @@ class ConfigService:
                 "member_count": len(members),
             })
         return result
+
+    @staticmethod
+    def _binding_summary(bindings: list[dict] | None, rules_by_name: dict) -> dict | None:
+        """绑定的可读摘要：规则数 / 候选数 / 每条规则选了几个（CH-024）"""
+        if not bindings:
+            return None
+        items = []
+        cand_total = 0
+        for b in bindings:
+            rule = rules_by_name.get(b.get("rule")) or {}
+            picked = b.get("candidates")
+            if picked is None:
+                count = len(rule.get("candidates", []))
+                followed = True
+            else:
+                count = len(picked)
+                followed = False
+            cand_total += count
+            items.append({"rule": b.get("rule"), "count": count, "follow_all": followed})
+        return {"rule_count": len(bindings), "candidate_count": cand_total, "items": items}
 
     def save_aggregation(self, name: str, data: dict) -> None:
         self.config.save_aggregation(name, data)

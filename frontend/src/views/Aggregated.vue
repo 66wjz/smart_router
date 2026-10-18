@@ -79,7 +79,10 @@
                   :disabled="savingName === g.name" @click="openEdit(g)">
                   {{ savingName === g.name ? '保存中…' : '编辑成员' }}
                 </BaseButton>
-                <BaseButton v-else variant="ghost" size="sm" @click="openRuleDetail(g)">查看候选</BaseButton>
+                <BaseButton v-else variant="primary" size="sm"
+                  :disabled="savingName === g.name" @click="openEditRuleGroup(g)">
+                  {{ savingName === g.name ? '保存中…' : '编辑绑定' }}
+                </BaseButton>
                 <BaseButton v-if="g.kind === 'rule' || !g.configured" variant="danger" size="sm"
                   :disabled="savingName === g.name" @click="removeGroup(g)">移除</BaseButton>
                 <BaseButton v-else variant="ghost" size="sm"
@@ -102,11 +105,25 @@
               <span v-if="!g.members.length" class="empty-tip"><el-text type="warning">没有任何可用成员</el-text></span>
             </div>
 
-            <!-- 规则聚合：匹配的规则名 -->
+            <!-- 规则聚合：绑定的规则与候选 -->
             <div v-else class="rule-flow">
-              <span class="rule-hint">候选由路由规则决定，运行时按请求内容匹配：</span>
-              <BaseBadge v-for="r in g.rule_names || []" :key="r" variant="purple">{{ r }}</BaseBadge>
-              <span class="rule-cost">覆盖 {{ g.member_count }} 个探测单元</span>
+              <span class="rule-hint">
+                {{ g.rule_bindings ? '按绑定的规则与候选路由：' : '候选由路由规则决定，运行时按请求内容匹配：' }}
+              </span>
+              <BaseBadge v-for="item in (g.rule_binding_summary?.items || [])" :key="item.rule"
+                variant="purple">
+                {{ item.rule }}({{ item.count }}{{ item.follow_all ? ' · 跟随' : '' }})
+              </BaseBadge>
+              <BaseBadge v-if="!g.rule_bindings" v-for="r in g.rule_names || []" :key="'r-' + r"
+                variant="purple">{{ r }}</BaseBadge>
+              <span class="rule-cost">
+                {{ g.rule_binding_summary
+                  ? `${g.rule_binding_summary.rule_count} 条规则 · ${g.rule_binding_summary.candidate_count} 个候选 · `
+                  : '' }}覆盖 {{ g.member_count }} 个探测单元
+              </span>
+              <BaseBadge v-if="(g.stale_bindings || []).length" variant="amber">
+                {{ (g.stale_bindings || []).length }} 个绑定已失效
+              </BaseBadge>
             </div>
 
             <div v-if="!g.enabled" class="group-warn">
@@ -385,43 +402,92 @@
       </template>
     </BaseModal>
 
-    <!-- 编辑/新建固定成员聚合 -->
-    <BaseModal v-model:visible="editVisible" :title="editMode === 'create' ? '新建聚合' : `编辑聚合：${editName}`" size="large">
-      <el-alert
-        title="拖动调整优先级（从上到下即请求尝试顺序）；每个成员可指定该源里的真实模型名，因此不同源的异名模型也能聚合到一起。"
-        type="info"
-        :closable="false"
-        style="margin-bottom: 12px"
-      />
+    <!-- 编辑/新建聚合 -->
+    <BaseModal v-model:visible="editVisible"
+      :title="editMode === 'create' ? '新建聚合' : `编辑聚合：${editName}`" size="large">
       <el-form label-width="90px" style="margin-bottom: 12px">
         <el-form-item label="聚合名" required>
           <BaseInput v-model="editName" :disabled="editMode === 'edit'" placeholder="客户端请求时使用的名字，如 deepseek-v4-1-flash" />
         </el-form-item>
+        <el-form-item label="聚合类型" required>
+          <el-radio-group v-model="editKind" :disabled="editMode === 'edit'">
+            <el-radio value="static">固定成员（自己指定源与模型）</el-radio>
+            <el-radio value="rule">规则匹配（复用路由规则，可裁剪）</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
 
-      <div ref="dragListRef" class="drag-list">
-        <div v-for="item in editItems" :key="item.upstream + '|' + item.model" class="drag-item">
-          <span class="drag-handle" role="button" tabindex="0" aria-label="拖动调整顺序" title="拖动调整顺序">⠿</span>
-          <span class="drag-upstream">{{ item.upstream }}</span>
-          <el-select v-model="item.model" filterable allow-create default-first-option size="small"
-            class="drag-model-select" placeholder="该源里的真实模型名">
-            <el-option v-for="m in modelsOf(item.upstream)" :key="m" :label="m" :value="m" />
+      <!-- 固定成员编辑 -->
+      <div v-if="editKind === 'static'">
+        <el-alert
+          title="拖动调整优先级（从上到下即请求尝试顺序）；每个成员可指定该源里的真实模型名，因此不同源的异名模型也能聚合到一起。"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+
+        <div ref="dragListRef" class="drag-list">
+          <div v-for="item in editItems" :key="item.upstream + '|' + item.model" class="drag-item">
+            <span class="drag-handle" role="button" tabindex="0" aria-label="拖动调整顺序" title="拖动调整顺序">⠿</span>
+            <span class="drag-upstream">{{ item.upstream }}</span>
+            <el-select v-model="item.model" filterable allow-create default-first-option size="small"
+              class="drag-model-select" placeholder="该源里的真实模型名">
+              <el-option v-for="m in modelsOf(item.upstream)" :key="m" :label="m" :value="m" />
+            </el-select>
+            <el-input-number v-model="item.weight" :min="1" :max="10" size="small" style="width: 90px" />
+            <BaseButton variant="danger" size="sm" @click="removeItem(item)">移除</BaseButton>
+          </div>
+        </div>
+        <el-empty v-if="!editItems.length" description="还没有成员，请在下方添加" :image-size="50" />
+
+        <div class="add-row">
+          <el-select v-model="addUpstream" placeholder="选择上游源" size="small" style="width: 200px" @change="onAddUpstreamChange">
+            <el-option v-for="u in upstreams" :key="u.id" :label="u.name || u.id" :value="u.id" />
           </el-select>
-          <el-input-number v-model="item.weight" :min="1" :max="10" size="small" style="width: 90px" />
-          <BaseButton variant="danger" size="sm" @click="removeItem(item)">移除</BaseButton>
+          <el-select v-model="addModel" filterable allow-create default-first-option size="small"
+            placeholder="选择/输入真实模型名" style="width: 300px">
+            <el-option v-for="m in modelsOf(addUpstream)" :key="m" :label="m" :value="m" />
+          </el-select>
+          <BaseButton variant="primary" size="sm" @click="addItem">+ 添加成员</BaseButton>
         </div>
       </div>
-      <el-empty v-if="!editItems.length" description="还没有成员，请在下方添加" :image-size="50" />
 
-      <div class="add-row">
-        <el-select v-model="addUpstream" placeholder="选择上游源" size="small" style="width: 200px" @change="onAddUpstreamChange">
-          <el-option v-for="u in upstreams" :key="u.id" :label="u.name || u.id" :value="u.id" />
-        </el-select>
-        <el-select v-model="addModel" filterable allow-create default-first-option size="small"
-          placeholder="选择/输入真实模型名" style="width: 300px">
-          <el-option v-for="m in modelsOf(addUpstream)" :key="m" :label="m" :value="m" />
-        </el-select>
-        <BaseButton variant="primary" size="sm" @click="addItem">+ 添加成员</BaseButton>
+      <!-- 规则绑定编辑 -->
+      <div v-else>
+        <el-alert
+          title="勾选本聚合要使用的规则；每条规则可只选部分候选。全选表示「跟随」——路由规则页以后新增的模型会自动纳入本聚合。"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-empty v-if="!ruleCatalog.length" description="路由规则页还没有候选，请先去配置" :image-size="50" />
+
+        <div v-for="item in ruleCatalog" :key="item.name" class="bind-card">
+          <div class="bind-head">
+            <el-checkbox v-model="item.used" @change="onRuleUsedChange(item)">
+              <span class="bind-rule-name">{{ item.name }}</span>
+            </el-checkbox>
+            <span class="bind-match">{{ matchText(item.match) }}</span>
+            <span class="bind-count">
+              {{ item.picked.length }} / {{ item.candidates.length }} 个候选
+              <BaseBadge v-if="item.followAll && item.used" variant="green">跟随</BaseBadge>
+            </span>
+            <BaseButton v-if="item.used" variant="ghost" size="sm"
+              @click="selectAllCandidates(item, true)">全选</BaseButton>
+          </div>
+          <div v-if="item.used" class="bind-cands">
+            <el-checkbox
+              v-for="c in item.candidates"
+              :key="c.upstream + '|' + c.model"
+              :model-value="item.picked.includes(c.upstream + '|' + c.model)"
+              @update:model-value="() => toggleCandidate(item, c)"
+            >
+              <span class="cand-src">{{ c.upstream }}</span>
+              <code class="cand-model">{{ c.model }}</code>
+              <span class="cand-meta">P{{ c.priority || 1 }} · 权重 {{ c.weight || 1 }}</span>
+            </el-checkbox>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -462,6 +528,7 @@ import {
   type ProbeTemplate,
 } from '@/api/aggregations'
 import { listGroupSuggestions, listSourceModels, saveModelGroup } from '@/api/model_groups'
+import { getRules } from '@/api/rules'
 import { listUpstreams } from '@/api/upstreams'
 import { getProbeConfig, saveProbeConfig } from '@/api/settings'
 import { reloadConfig } from '@/api/common'
@@ -508,6 +575,20 @@ const probeForm = ref<ProbeFormModel>(emptyProbeForm())
 const ruleVisible = ref(false)
 const ruleName = ref('')
 const ruleUnits = ref<any[]>([])
+
+// ---------- 类型 + 规则绑定（CH-024） ----------
+const editKind = ref<'static' | 'rule'>('static')
+interface BindItem {
+  name: string
+  match: any
+  candidates: any[]
+  used: boolean
+  /** 该规则内全部候选都勾选 → 保存为 candidates: null（跟随） */
+  followAll: boolean
+  picked: string[]
+}
+const ruleCatalog = ref<BindItem[]>([])
+const rules = ref<any[]>([])
 
 // ---------- 成员编辑 ----------
 const sourceModels = reactive<Record<string, string[]>>({})
@@ -600,6 +681,15 @@ async function loadPlan() {
 async function loadUpstreams() {
   const res: any = await listUpstreams()
   upstreams.value = res.upstreams || []
+}
+
+async function loadRules() {
+  try {
+    const res: any = await getRules()
+    rules.value = res.rules || []
+  } catch {
+    rules.value = []
+  }
 }
 
 // ---------- 聚合操作 ----------
@@ -720,12 +810,101 @@ async function saveProbe() {
   }
 }
 
-// ---------- 规则聚合候选 ----------
+// ---------- 规则聚合候选（只读查看） ----------
 async function openRuleDetail(g: Aggregation) {
   ruleName.value = g.name
-  const res: any = await listRuleUnits()
+  const res: any = await listRuleUnits(g.name)
   ruleUnits.value = res.units || []
   ruleVisible.value = true
+}
+
+// ---------- 规则绑定编辑（CH-024） ----------
+function candKey(c: any): string {
+  return `${c.upstream}|${c.model}`
+}
+
+function matchText(match: any): string {
+  if (!match) return ''
+  const parts: string[] = []
+  if (match.has_image) parts.push('含图片')
+  if (match.has_tools) parts.push('含工具调用')
+  if (match.default) parts.push('默认')
+  if (Array.isArray(match.content_keywords) && match.content_keywords.length) {
+    parts.push(`关键词: ${match.content_keywords.join('/')}`)
+  }
+  return parts.join(' + ') || '无条件'
+}
+
+function buildCatalog(agg?: Aggregation) {
+  const bindings = agg?.rule_bindings || null
+  ruleCatalog.value = (rules.value || []).map((r: any) => {
+    const candidates = (r.candidates || []).filter((c: any) => c.model)
+    const binding = bindings?.find((b: any) => b.rule === r.name)
+    const used = bindings ? Boolean(binding) : true
+    let picked: string[]
+    let followAll: boolean
+    if (!bindings) {
+      // 无绑定（新建或全跟随）→ 全选且标记跟随
+      picked = candidates.map(candKey)
+      followAll = true
+    } else if (used && binding?.candidates == null) {
+      picked = candidates.map(candKey)
+      followAll = true
+    } else if (used) {
+      picked = (binding?.candidates || []).map(candKey)
+      followAll = picked.length === candidates.length
+    } else {
+      picked = []
+      followAll = false
+    }
+    return { name: r.name, match: r.match, candidates, used, followAll, picked }
+  })
+}
+
+function onRuleUsedChange(item: BindItem) {
+  if (item.used) {
+    item.picked = item.candidates.map(candKey)
+    item.followAll = true
+  } else {
+    item.picked = []
+    item.followAll = false
+  }
+}
+
+function selectAllCandidates(item: BindItem, all: boolean) {
+  item.picked = all ? item.candidates.map(candKey) : []
+  item.followAll = all
+}
+
+function toggleCandidate(item: BindItem, c: any) {
+  const key = candKey(c)
+  if (item.picked.includes(key)) {
+    item.picked = item.picked.filter((k) => k !== key)
+  } else {
+    item.picked = [...item.picked, key]
+  }
+  item.followAll = item.picked.length === item.candidates.length
+}
+
+function collectBindings(): any[] | null {
+  const used = ruleCatalog.value.filter((i) => i.used && i.picked.length)
+  if (!used.length) return null
+  return used.map((i) => ({
+    rule: i.name,
+    // 全部勾选 → null（跟随，规则以后加模型自动纳入）
+    candidates: i.followAll ? null : i.picked.map((k) => {
+      const [upstream, model] = k.split('|')
+      return { upstream, model }
+    }),
+  }))
+}
+
+async function openEditRuleGroup(g: Aggregation) {
+  editMode.value = 'edit'
+  editName.value = g.name
+  editKind.value = 'rule'
+  buildCatalog(g)
+  editVisible.value = true
 }
 
 // ---------- 模板 ----------
@@ -854,6 +1033,7 @@ async function ensureSourceModels(upstream: string) {
 function openEdit(g: Aggregation) {
   editMode.value = 'edit'
   editName.value = g.name
+  editKind.value = 'static'
   editItems.value = (g.members || []).map((m: any) => ({
     upstream: m.upstream,
     model: m.model || g.name,
@@ -867,9 +1047,11 @@ function openEdit(g: Aggregation) {
 function openCreate() {
   editMode.value = 'create'
   editName.value = ''
+  editKind.value = 'static'
   editItems.value = []
   addUpstream.value = upstreams.value[0]?.id || ''
   addModel.value = ''
+  buildCatalog()
   ensureSourceModels(addUpstream.value)
   editVisible.value = true
   nextTick(initSortable)
@@ -920,14 +1102,29 @@ function initSortable() {
 async function saveEdit() {
   const name = (editName.value || '').trim()
   if (!name) return ElMessage.warning('聚合名为必填')
-  if (!editItems.value.length) return ElMessage.warning('至少添加一个成员')
+
+  if (editKind.value === 'rule') {
+    const used = ruleCatalog.value.filter((i) => i.used)
+    if (!used.length) return ElMessage.warning('至少勾选一条规则')
+    const empty = used.find((i) => !i.picked.length)
+    if (empty) return ElMessage.warning(`规则「${empty.name}」至少要保留一个候选（或取消勾选该规则）`)
+  } else if (!editItems.value.length) {
+    return ElMessage.warning('至少添加一个成员')
+  }
+
   savingName.value = name
   try {
-    await saveAggregation(name, {
-      kind: 'static',
-      members: editItems.value.map((x) => ({ upstream: x.upstream, model: x.model, weight: x.weight })),
-      enabled: true,
-    })
+    const payload: Record<string, unknown> = { kind: editKind.value, enabled: true }
+    if (editKind.value === 'rule') {
+      // rule 聚合不传 members（后端会拒绝）；规则绑定为空对象数组即"全跟随"
+      payload.rule_bindings = collectBindings() || []
+    } else {
+      payload.members = editItems.value.map((x) => ({
+        upstream: x.upstream, model: x.model, weight: x.weight,
+      }))
+      payload.rule_bindings = null
+    }
+    await saveAggregation(name, payload)
     ElMessage.success('聚合配置已保存')
     editVisible.value = false
     await reloadConfig()
@@ -940,7 +1137,7 @@ async function saveEdit() {
 }
 
 onMounted(async () => {
-  await loadUpstreams()
+  await Promise.all([loadUpstreams(), loadRules()])
   await loadAll()
 })
 </script>
@@ -1179,5 +1376,56 @@ onMounted(async () => {
   gap: 8px;
   margin-top: 12px;
   flex-wrap: wrap;
+}
+
+/* 规则绑定编辑（CH-024） */
+.bind-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  background: var(--bg-base);
+}
+.bind-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.bind-rule-name {
+  font-weight: 600;
+}
+.bind-match {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+.bind-count {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bind-cands {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  padding-left: 22px;
+}
+.cand-src {
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+  margin-right: 6px;
+}
+.cand-model {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.76rem;
+}
+.cand-meta {
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  margin-left: 8px;
 }
 </style>

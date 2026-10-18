@@ -30,6 +30,23 @@ export interface AggregationProbe {
   template_name: string
 }
 
+export interface RuleBindingCandidate {
+  upstream: string
+  model: string
+}
+
+/** 规则绑定：candidates=null 表示该规则内全部候选跟随 */
+export interface RuleBinding {
+  rule: string
+  candidates: RuleBindingCandidate[] | null
+}
+
+export interface RuleBindingSummary {
+  rule_count: number
+  candidate_count: number
+  items: { rule: string; count: number; follow_all: boolean }[]
+}
+
 export interface Aggregation {
   name: string
   kind: 'static' | 'rule'
@@ -50,6 +67,11 @@ export interface Aggregation {
   }
   remark: string
   rule_names?: string[]
+  /** CH-024：仅 rule 聚合，null = 全跟随 */
+  rule_bindings?: RuleBinding[] | null
+  rule_binding_summary?: RuleBindingSummary | null
+  /** CH-024：失效的绑定（规则被删 / 候选被移除） */
+  stale_bindings?: { rule: string; reason: string; candidate?: RuleBindingCandidate }[]
 }
 
 export interface ProbeTemplate {
@@ -109,9 +131,9 @@ export function deleteAggregation(name: string) {
   return request.delete('/admin/api/aggregations', { params: { name } })
 }
 
-/** rule 聚合的探测对象：所有路由规则候选的并集 */
-export function listRuleUnits() {
-  return request.get('/admin/api/aggregations/rule-units')
+/** rule 聚合的探测对象：所有路由规则候选的并集；传 name 则只算该聚合的绑定 */
+export function listRuleUnits(name?: string) {
+  return request.get('/admin/api/aggregations/rule-units', { params: name ? { name } : {} })
 }
 
 // ---------- 探测模板 ----------

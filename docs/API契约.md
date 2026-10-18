@@ -522,14 +522,23 @@ Header: `Authorization: Bearer <token>`
                      "slow_threshold_seconds": 5.0, "sort_mode": "latency", "schedule": {"..."} },
     "remark": "" },
   { "name": "smart-latest", "kind": "rule", "members": [], "member_count": 7,
-    "rule_names": ["默认对话", "视觉理解"] } ] }
+    "rule_names": ["默认对话", "视觉理解"],
+    "rule_bindings": [{"rule": "默认对话", "candidates": null},
+                      {"rule": "视觉理解", "candidates": [{"upstream":"buddy","model":"gemini-2.5-pro"}]}],
+    "rule_binding_summary": {"rule_count": 2, "candidate_count": 3,
+      "items": [{"rule":"默认对话","count":2,"follow_all":true},
+                {"rule":"视觉理解","count":1,"follow_all":false}]},
+    "stale_bindings": [] } ] }
 ```
 
 - **说明**:
   - `kind=static`：固定成员，`members` 为候选链路
-  - `kind=rule`：候选由路由规则运行时匹配，`members` 恒空，`member_count` 为规则候选并集的单元数
+  - `kind=rule`：候选由路由规则运行时匹配，`members` 恒空，`member_count` 为**按绑定裁剪后**的候选展开单元数
   - `configured=false`：未人工配置、由同名模型自动发现
   - `probe` 为**生效值**（模板优先 → 自配 → 全局）；`self_config` 为落库原值（编辑回显用）
+  - `rule_bindings`（CH-024，仅 rule）：`null`/`[]` = 全跟随（所有规则、全部候选）；`[{"rule","candidates"}]` 中 `candidates=null` 表示该规则候选全跟随，数组表示显式候选子集
+  - `rule_binding_summary`：卡片摘要（规则数 / 候选数 / 每条规则明细）
+  - `stale_bindings`：失效项（规则已删除 `rule_missing` / 候选已移出规则 `candidate_missing`），供 UI 提示
 
 #### 4.28.2 新建 / 更新聚合
 
@@ -539,6 +548,8 @@ Header: `Authorization: Bearer <token>`
 
 ```json
 { "kind": "static|rule", "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
+  "rule_bindings": [{"rule":"默认对话","candidates":null},
+                    {"rule":"视觉理解","candidates":[{"upstream":"buddy","model":"gemini-2.5-pro"}]}],
   "enabled": true,
   "probe_enabled": true, "template_id": 1,
   "sort_mode": "stable|latency", "interval_seconds": 60, "slow_threshold_seconds": 5,
@@ -549,6 +560,8 @@ Header: `Authorization: Bearer <token>`
 - **语义**:
   - `template_id` / `interval_seconds` / `slow_threshold_seconds` 支持**显式 `null` 清空**（后端用 `model_fields_set` 区分「未提供」与「传 null」）
   - `kind=rule` 不允许传 `members`
+  - `rule_bindings`（CH-024，仅 `kind=rule`）：同样支持显式 `null`/`[]` 清空（= 全跟随）
+  - `rule_bindings[].rule` 必须存在于当前规则表（否则 404）；`candidates` 里的 `{upstream, model}` 必须属于该规则的候选（否则 400）；规则候选列表为空时不允许绑定（400）
   - `template_id` 非空时必须存在
 - **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源或模板不存在
 
@@ -560,10 +573,12 @@ Header: `Authorization: Bearer <token>`
 
 #### 4.28.4 rule 聚合的探测对象
 
-- **路径**: `GET /admin/api/aggregations/rule-units`
+- **路径**: `GET /admin/api/aggregations/rule-units?name={聚合名}`（`name` 可选，CH-024）
 - **鉴权**: JWT
-- **出参**: `{ "units": [{"upstream":"buddy","model":"deepseek-v4-1-flash","upstream_name":"Buddy"}] }`
-- **说明**: 所有路由规则候选展开后的并集（聚合名形式的候选已展开为各源真实模型名）
+- **出参**: `{ "units": [{"upstream":"buddy","model":"deepseek-v4-1-flash","upstream_name":"Buddy"}], "aggregation": "smart-latest" }`
+- **说明**:
+  - 传 `name`：返回**该聚合按 `rule_bindings` 裁剪后**的候选展开并集
+  - 不传 `name`：返回所有路由规则候选展开后的并集（旧行为，聚合名形式的候选已展开为各源真实模型名）
 
 ### 4.29 探测模板（CH-023）
 
@@ -656,6 +671,8 @@ Header: `Authorization: Bearer <token>`
 - **路径**: `PUT /admin/api/rules`
 - **鉴权**: JWT
 - **入参**: `{ "rules": [...] }`（同上格式）
+- **出参**（CH-024）: `{ "ok": true, "affected_aggregations": ["smart-latest"] }`
+- **说明**: 保存后自动清理引用已删除/改名规则的聚合绑定（`prune_rule_bindings`）；清理后绑定为空则回退全跟随。`affected_aggregations` 为被清理的聚合名，供前端提示
 
 ### 4.8 聚合模型名（CH-023 起为兼容入口）
 
@@ -830,6 +847,7 @@ Header: `Authorization: Bearer <token>`
 | 别名增删改查 | /admin/api/model-pointers | pt_pointer |
 | 延迟与健康状态 | GET /status | （内存状态） |
 | 聚合名管理 | GET/PUT /admin/api/aggregated-names（兼容）；GET/PUT/DELETE /admin/api/aggregations | agg_unified（kind=rule） |
+| rule 聚合规则绑定 | PUT /admin/api/aggregations（`rule_bindings`）；GET /admin/api/aggregations（`rule_bindings` / `rule_binding_summary` / `stale_bindings`） | agg_unified(rule_bindings) |
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
 | 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_unified（kind=static, members） |
 | 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups（兼容）；GET/PUT/DELETE /admin/api/aggregations；GET .../suggestions；GET .../source-models | agg_unified |

@@ -30,6 +30,8 @@ class AggregationMember(BaseModel):
 class AggregationUpdate(BaseModel):
     kind: str | None = None                 # 新建必填；更新时缺省保持原类型
     members: list[AggregationMember] | None = None
+    # 仅 kind=rule：规则绑定子集；null / [] = 全跟随（CH-024）
+    rule_bindings: list[dict] | None = None
     enabled: bool | None = None
 
     # 探测（若挂了模板，以下自配字段不生效）
@@ -74,6 +76,52 @@ class AggregationUpdate(BaseModel):
         return v
 
 
+def _validate_bindings(cfg, raw: list[dict] | None) -> list[dict] | None:
+    """校验规则绑定（CH-024）
+
+    - 空 / None → None（全跟随）
+    - 规则名必须存在
+    - 候选必须属于该规则（防止前端传错 upstream）
+    """
+    if not raw:
+        return None
+    valid_rules = {r.get("name"): r for r in cfg.rules}
+    cleaned: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(400, "规则绑定格式不正确")
+        rule_name = str(item.get("rule") or "").strip()
+        if not rule_name:
+            raise HTTPException(400, "规则绑定缺少 rule 名称")
+        rule = valid_rules.get(rule_name)
+        if rule is None:
+            raise HTTPException(404, f"路由规则「{rule_name}」不存在")
+
+        cands = item.get("candidates")
+        if cands is None:
+            cleaned.append({"rule": rule_name, "candidates": None})
+            continue
+        if not isinstance(cands, list) or not cands:
+            raise HTTPException(400, f"规则「{rule_name}」至少要保留一个候选（全选请传 candidates=null）")
+
+        available = {
+            (c.get("upstream", cfg.default_upstream), c.get("model"))
+            for c in rule.get("candidates", [])
+        }
+        picked = []
+        for c in cands:
+            if not isinstance(c, dict) or not c.get("upstream") or not c.get("model"):
+                raise HTTPException(400, "候选项需要 upstream 与 model")
+            key = (c["upstream"], c["model"])
+            if key not in available:
+                raise HTTPException(400, f"候选 {c['upstream']}·{c['model']} 不在规则「{rule_name}」中")
+            picked.append({"upstream": c["upstream"], "model": c["model"]})
+        cleaned.append({"rule": rule_name, "candidates": picked})
+    if not cleaned:
+        return None
+    return cleaned
+
+
 @router.get("/aggregations")
 async def list_aggregations(request: Request, _=Depends(check_auth)):
     """统一聚合列表（static + rule），含生效探测参数与模板名"""
@@ -111,6 +159,18 @@ async def save_aggregation(name: str, req: AggregationUpdate, request: Request, 
                 raise HTTPException(404, f"上游源 {item.upstream} 不存在")
         members = [m.model_dump() for m in req.members]
 
+    # CH-024：规则绑定校验（仅 rule 聚合）
+    rule_bindings = existing.get("rule_bindings")
+    if "rule_bindings" in provided:
+        if kind != "rule":
+            if req.rule_bindings:
+                raise HTTPException(400, "只有 rule 类型聚合可以配置规则绑定")
+            rule_bindings = None
+        else:
+            rule_bindings = _validate_bindings(cfg, req.rule_bindings)
+    elif kind == "rule" and req.kind == "rule" and not existing:
+        rule_bindings = None
+
     def pick(field: str, default=None):
         """字段显式提供（含 null）就用请求值，否则沿用原值"""
         if field in provided:
@@ -120,6 +180,7 @@ async def save_aggregation(name: str, req: AggregationUpdate, request: Request, 
     payload = {
         "kind": kind,
         "members": members,
+        "rule_bindings": rule_bindings,
         "enabled": req.enabled if req.enabled is not None else existing.get("enabled", True),
         "probe_enabled": req.probe_enabled if req.probe_enabled is not None
         else existing.get("probe_enabled", False),
@@ -149,11 +210,14 @@ async def delete_aggregation(name: str, request: Request, _=Depends(check_auth))
 
 
 @router.get("/aggregations/rule-units")
-async def list_rule_units(request: Request, _=Depends(check_auth)):
-    """rule 聚合的探测对象 = 所有路由规则候选的并集（实时展开为源 + 真实模型名）"""
+async def list_rule_units(request: Request, name: str | None = None, _=Depends(check_auth)):
+    """rule 聚合的探测对象（规则候选并集）
+
+    传 name 时只返回该聚合绑定的规则/候选展开结果（CH-024）；不传则为全部规则。
+    """
     cfg = request.app.state.config
-    units = cfg.rule_candidate_units()
+    units = cfg.rule_candidate_units(name)
     for u in units:
         upstream = cfg.get_upstream(u["upstream"]) or {}
         u["upstream_name"] = upstream.get("name", u["upstream"])
-    return {"units": units}
+    return {"units": units, "aggregation": name}

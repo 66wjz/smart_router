@@ -229,11 +229,12 @@ class RouterService:
         if model_name in self.config.aggregated_names:
             # rule 聚合：候选来自路由规则匹配，仍按 priority + 动态权重排序
             # （探测结果通过 get_dynamic_weight 参与排序，CH-023 保持不变）
+            # CH-024：传入聚合名，按该聚合的规则/候选绑定裁剪
             messages = body.get("messages", [])
             est_tokens = estimate_tokens(messages)
             candidates = get_ordered_candidates(
                 messages, body, self.config, self.probe, self.health, est_tokens,
-                allowed_groups=key_groups,
+                allowed_groups=key_groups, aggregation=model_name,
             )
             if self.config.log_routing:
                 c_str = ", ".join(c["model"].split("/")[-1] for c in candidates[:3])

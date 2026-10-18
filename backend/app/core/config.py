@@ -424,6 +424,7 @@ class AppConfig:
         self._repos["aggregation"].upsert(model, {
             "kind": "static",
             "members": upstreams,
+            "rule_bindings": None,
             "enabled": enabled,
             "probe_enabled": existing.get("probe_enabled", False),
             "template_id": existing.get("template_id"),
@@ -480,6 +481,7 @@ class AppConfig:
             self._repos["aggregation"].upsert(model, {
                 "kind": existing.get("kind") or "static",
                 "members": existing.get("members") or [],
+                "rule_bindings": existing.get("rule_bindings"),
                 "enabled": existing.get("enabled", True),
                 "probe_enabled": bool(data.get("enabled")),
                 "template_id": data.get("template_id", existing.get("template_id")),
@@ -501,6 +503,7 @@ class AppConfig:
             self._repos["aggregation"].upsert(model, {
                 "kind": existing.get("kind") or "static",
                 "members": existing.get("members") or [],
+                "rule_bindings": existing.get("rule_bindings"),
                 "enabled": existing.get("enabled", True),
                 "probe_enabled": False,
                 "template_id": None,
@@ -578,16 +581,16 @@ class AppConfig:
                 return t
         return None
 
-    def rule_candidate_units(self) -> list[dict]:
-        """所有路由规则候选展开后的 (上游源, 真实模型) 列表（CH-023）
+    def rule_candidate_units(self, aggregation: str | None = None) -> list[dict]:
+        """规则候选展开后的 (上游源, 真实模型) 列表（CH-023 / CH-024）
 
-        rule 聚合的探测对象 = 全部规则候选的并集：探测时无法预知请求会命中哪条规则，
-        只能全探。聚合名形式的候选会继续展开为各源真实模型名。
+        传 aggregation 时只展开该聚合绑定的规则与候选；不传则展开全部规则。
+        聚合名形式的候选会继续展开为各源真实模型名。
         """
         group_members = self.collect_group_members()
         units: list[dict] = []
         seen: set[tuple[str, str]] = set()
-        for rule in self._rules:
+        for rule in self.bound_rules(aggregation):
             for c in rule.get("candidates", []):
                 model = c.get("model", "")
                 expanded = (
@@ -716,7 +719,7 @@ class AppConfig:
             settings = self.group_probe_settings(name)
             if not settings["enabled"]:
                 continue
-            for unit in self.rule_candidate_units():
+            for unit in self.rule_candidate_units(name):
                 add(unit["upstream"], unit["model"], "group", name,
                     settings["interval_seconds"], settings["schedule"])
 
@@ -765,16 +768,23 @@ class AppConfig:
     # ============================================================
 
     def sync_unified_tables(self) -> None:
-        """执行增量 SQL（幂等建表 + 迁移），供启动时补齐 CH-023 结构"""
+        """执行增量 SQL（幂等建表 + 迁移），供启动时补齐 CH-023 / CH-024 结构"""
         import os
         from app.core.database import get_conn
 
-        path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-            "sql", "increment", "07_增量_20261017_聚合统一与探测模板.sql",
-        )
-        with open(path, encoding="utf-8") as f:
-            get_conn().executescript(f.read())
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        for filename in (
+            "07_增量_20261017_聚合统一与探测模板.sql",
+            "08_增量_20261017_聚合规则绑定.sql",
+        ):
+            path = os.path.join(base, "sql", "increment", filename)
+            with open(path, encoding="utf-8") as f:
+                try:
+                    get_conn().executescript(f.read())
+                except Exception as e:
+                    # 08 的 ALTER TABLE 重复执行会报 duplicate column，视为已补
+                    if "duplicate column" not in str(e).lower():
+                        raise
 
     def _refresh_unified(self) -> None:
         """只重载统一聚合/模板视图（不动 Key 池与上游缓存），供聚合 CRUD 后热更新"""
@@ -818,6 +828,85 @@ class AppConfig:
         self._repos["probe_template"].delete(template_id)
         self._refresh_unified()
         return affected
+
+    def rule_bindings_of(self, name: str) -> list[dict] | None:
+        """某 rule 聚合的规则绑定（CH-024）；None = 全跟随"""
+        with self._lock:
+            entity = self._aggregations.get(name)
+        if not entity or entity.get("kind") != "rule":
+            return None
+        return entity.get("rule_bindings")
+
+    def bound_rules(self, name: str | None = None) -> list[dict]:
+        """按聚合绑定裁剪后的规则列表 [{name, match, candidates}]
+
+        name 为空、聚合无绑定、或绑定里的规则都已失效 → 返回全部规则（兼容旧行为）。
+        """
+        bindings = self.rule_bindings_of(name) if name else None
+        if not bindings:
+            return list(self._rules)
+
+        by_name = {r.get("name"): r for r in self._rules}
+        result: list[dict] = []
+        for b in bindings:
+            rule = by_name.get(b.get("rule"))
+            if rule is None:
+                continue
+            picked = b.get("candidates")
+            if picked is None:
+                result.append(rule)
+                continue
+            wanted = {(c.get("upstream"), c.get("model")) for c in picked}
+            cands = [
+                c for c in rule.get("candidates", [])
+                if (c.get("upstream", self.default_upstream), c.get("model")) in wanted
+            ]
+            if cands:
+                result.append({**rule, "candidates": cands})
+        return result or list(self._rules)
+
+    def prune_rule_bindings(self, valid_names: set[str]) -> list[str]:
+        """规则被删除/改名后清理各 rule 聚合的绑定（CH-024）
+
+        返回受影响聚合名。清理后若绑定为空 → 存 NULL（回退全跟随）。
+        """
+        affected: list[str] = []
+        repo = self._repos["aggregation"]
+        for name, bindings in repo.list_rule_bindings().items():
+            if not bindings:
+                continue
+            kept = [b for b in bindings if b.get("rule") in valid_names]
+            if len(kept) == len(bindings):
+                continue
+            repo.update_rule_bindings(name, kept or None)
+            affected.append(name)
+        if affected:
+            self._refresh_unified()
+            log.warning(f"[聚合] 规则变更后清理了 {len(affected)} 个聚合的绑定: {affected}")
+        return affected
+
+    def rule_binding_issues(self, name: str) -> list[dict]:
+        """检查某 rule 聚合的绑定是否有失效项（规则不存在 / 候选已被移除）"""
+        bindings = self.rule_bindings_of(name) or []
+        by_name = {r.get("name"): r for r in self._rules}
+        issues: list[dict] = []
+        for b in bindings:
+            rule = by_name.get(b.get("rule"))
+            if rule is None:
+                issues.append({"rule": b.get("rule"), "reason": "rule_missing"})
+                continue
+            picked = b.get("candidates")
+            if picked is None:
+                continue
+            existing = {(c.get("upstream"), c.get("model")) for c in rule.get("candidates", [])}
+            for c in picked:
+                if (c.get("upstream"), c.get("model")) not in existing:
+                    issues.append({
+                        "rule": b.get("rule"),
+                        "reason": "candidate_missing",
+                        "candidate": c,
+                    })
+        return issues
 
     def is_rule_aggregation(self, name: str) -> bool:
         """是否为 rule 类型聚合（候选来自路由规则）"""
@@ -938,10 +1027,15 @@ class AppConfig:
                 self.key_pool.reset(upstream_id)
         return ok
 
-    def set_rules(self, rules: list[dict]) -> None:
+    def set_rules(self, rules: list[dict]) -> list[str]:
+        """整体替换路由规则，并清理 rule 聚合中已失效的绑定（CH-024）
+
+        返回因规则删除/改名而被清理绑定的聚合名。
+        """
         self._repos["rule"].replace_all(rules)
         with self._lock:
             self._rules = self._repos["rule"].list_all()
+        return self.prune_rule_bindings({r.get("name", "") for r in rules})
 
     def add_api_key(self, name: str, key_value: str, groups: list | None = None,
                     enabled: bool = True) -> bool:
@@ -1010,6 +1104,7 @@ class AppConfig:
             self._repos["aggregation"].upsert(name, {
                 "kind": "rule",
                 "members": [],
+                "rule_bindings": prev.get("rule_bindings"),
                 "enabled": True if prev.get("kind") == "rule" else prev.get("enabled", True),
                 "probe_enabled": prev.get("probe_enabled", False),
                 "template_id": prev.get("template_id"),
