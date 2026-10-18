@@ -59,13 +59,13 @@
             <BaseInput v-model="addForm.key" type="password" placeholder="sk-my-key-123" show-password />
             <BaseButton variant="ghost" size="sm" @click="regenerate">重新生成</BaseButton>
           </div>
-          <el-text type="info" size="small">已自动生成随机 Key，也可手动修改或点击「重新生成」换一个</el-text>
+          <BaseHint text="已自动生成随机 Key，也可手动修改或点击「重新生成」换一个" />
         </el-form-item>
         <el-form-item label="分组">
           <el-select v-model="addForm.groups" multiple placeholder="选择分组" style="width: 100%">
             <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
           </el-select>
-          <el-text type="info" size="small">该 Key 只能访问所选分组的上游源</el-text>
+          <BaseHint text="该 Key 只能访问所选分组的上游源" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -111,7 +111,7 @@
             <code>{{ apiBase }}/v1/chat/completions</code>
             <BaseButton variant="ghost" size="sm" @click="copyText(`${apiBase}/v1/chat/completions`)">复制</BaseButton>
           </div>
-          <el-text type="info" size="small">流式：请求体加 "stream": true；模型列表：GET {{ apiBase }}/v1/models</el-text>
+          <BaseHint>流式：请求体加 "stream": true；模型列表：GET {{ apiBase }}/v1/models</BaseHint>
         </div>
 
         <div class="usage-block">
@@ -160,6 +160,7 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
 import { addApiKey, deleteApiKey, listApiKeys, updateApiKey } from '@/api/apiKeys'
 import { listUpstreams } from '@/api/upstreams'

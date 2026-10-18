@@ -2,9 +2,8 @@
   <div>
     <!-- 全局容错 -->
     <BaseSection variant="card" title="全局容错">
-      <el-text type="info" size="small" style="margin-bottom: 12px; display: block">
-        这些参数对所有请求生效，与具体聚合无关：请求重试决定一次请求最多尝试几个候选；智能重试只对开启了该开关的上游源生效；故障转移决定模型与 Key 的冷却策略。
-      </el-text>
+      <BaseHint block style="margin-bottom: 12px"
+        text="这些参数对所有请求生效，与具体聚合无关：请求重试决定一次请求最多尝试几个候选；智能重试只对开启了该开关的上游源生效；故障转移决定模型与 Key 的冷却策略。" />
 
       <el-divider content-position="left">请求重试</el-divider>
       <el-form :model="retryForm" label-width="140px">
@@ -33,9 +32,8 @@
       </el-form>
 
       <el-divider content-position="left">智能重试</el-divider>
-      <el-text type="info" size="small" style="margin-bottom: 12px; display: block">
-        仅对开启了「智能重试」的上游源生效（上游源编辑弹窗中开启）。失败后优先换 Key 立即重试；只剩同一个 Key 时按退避间隔等待后重试。
-      </el-text>
+      <BaseHint block style="margin-bottom: 12px"
+        text="仅对开启了「智能重试」的上游源生效（上游源编辑弹窗中开启）。失败后优先换 Key 立即重试；只剩同一个 Key 时按退避间隔等待后重试。" />
       <el-form :model="smartRetryForm" label-width="160px">
         <el-row :gutter="16">
           <el-col :span="8">
@@ -85,9 +83,8 @@
 
     <!-- 分组管理 -->
     <BaseSection variant="card" title="分组管理" style="margin-top: 16px">
-      <el-text type="info" size="small" style="margin-bottom: 12px; display: block">
-        上游源和 API Key 按分组做权限隔离：API Key 只能访问其所属分组的上游源。被上游源或 API Key 引用的分组不可删除。
-      </el-text>
+      <BaseHint block style="margin-bottom: 12px"
+        text="上游源和 API Key 按分组做权限隔离：API Key 只能访问其所属分组的上游源。被上游源或 API Key 引用的分组不可删除。" />
       <el-table :data="groupsForm" size="small" style="margin-bottom: 12px">
         <el-table-column label="分组名" min-width="180">
           <template #default="{ row }">
@@ -115,9 +112,8 @@
 
     <!-- 配置操作 -->
     <BaseSection variant="card" title="配置操作" style="margin-top: 16px">
-      <el-text type="info" size="small" style="margin-bottom: 12px; display: block">
-        延迟探测节奏与探测时段已移至「智能路由 → 聚合模型 → 探测计划」。若通过其他途径直接改了数据库，可点此手动重新加载全部配置（不影响正在处理的请求）。
-      </el-text>
+      <BaseHint block style="margin-bottom: 12px"
+        text="延迟探测节奏与探测时段已移至「智能路由 → 聚合模型 → 探测计划」。若通过其他途径直接改了数据库，可点此手动重新加载全部配置（不影响正在处理的请求）。" />
       <BaseButton variant="primary" :disabled="reloading" @click="handleReload">
         {{ reloading ? '热重载中...' : '热重载配置' }}
       </BaseButton>
@@ -131,6 +127,7 @@ import { ElMessage } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
 import { reloadConfig } from '@/api/common'
 import { listGroups, updateGroups } from '@/api/groups'
 import {

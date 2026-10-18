@@ -17,9 +17,7 @@
 
     <el-form-item v-if="mode === 'aggregation'" label="启用定时探测">
       <el-switch :model-value="form.enabled" @update:model-value="(v: any) => patch({ enabled: Boolean(v) })" />
-      <el-text type="info" size="small" style="margin-left: 10px">
-        {{ form.enabled ? '按生效节奏探测，结果用于候选排序' : '关闭后本聚合不新增探测单元（仍可能被其他聚合复用）' }}
-      </el-text>
+      <BaseHint inline :text="form.enabled ? '按生效节奏探测，结果用于候选排序' : '关闭后本聚合不新增探测单元（仍可能被其他聚合复用）'" />
     </el-form-item>
 
     <div :class="{ 'is-locked': Boolean(form.template_id) }">
@@ -29,9 +27,7 @@
           :min="0" :step="10" :disabled="Boolean(form.template_id)" style="width: 200px"
           @update:model-value="(v: any) => patch({ interval_seconds: Number(v) || null })"
         />
-        <el-text type="info" size="small" style="margin-left: 10px">
-          {{ form.template_id ? '由模板决定' : `0 = 跟随全局 ${globalInterval}s；多聚合共用同一单元时取最小值` }}
-        </el-text>
+        <BaseHint inline :text="form.template_id ? '由模板决定' : `0 = 跟随全局 ${globalInterval}s；多聚合共用同一单元时取最小值`" />
       </el-form-item>
 
       <el-form-item label="慢阈值（秒）">
@@ -40,9 +36,7 @@
           :min="0" :step="1" :disabled="Boolean(form.template_id)" style="width: 200px"
           @update:model-value="(v: any) => patch({ slow_threshold_seconds: Number(v) || null })"
         />
-        <el-text type="info" size="small" style="margin-left: 10px">
-          {{ form.template_id ? '由模板决定' : '0 = 跟随全局；超过此延迟的成员排到后面' }}
-        </el-text>
+        <BaseHint inline :text="form.template_id ? '由模板决定' : '0 = 跟随全局；超过此延迟的成员排到后面'" />
       </el-form-item>
 
       <el-form-item label="排序模式">

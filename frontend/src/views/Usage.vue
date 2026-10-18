@@ -68,7 +68,7 @@
       <!-- 按单元（上游源 × 真实模型） -->
       <h4 style="margin: 16px 0 8px">
         按单元（上游源 × 真实模型）
-        <el-text type="info" size="small">— 号池积分消耗核算，聚合请求会落到真实模型名</el-text>
+        <BaseHint inline text="— 号池积分消耗核算，聚合请求会落到真实模型名" />
       </h4>
       <el-table :data="byUnit" stripe size="small" v-loading="loading">
         <el-table-column label="上游源" min-width="140" show-overflow-tooltip>
@@ -91,9 +91,7 @@
           <template #default="{ row }">{{ row.avg_duration_ms ? row.avg_duration_ms + 'ms' : '—' }}</template>
         </el-table-column>
       </el-table>
-      <div v-if="!byUnit.length" class="empty-tip">
-        <el-text type="info" size="small">暂无数据。该统计需要请求实际命中上游后才会有记录。</el-text>
-      </div>
+      <BaseEmptyState v-if="!byUnit.length" description="暂无数据。该统计需要请求实际命中上游后才会有记录。" />
 
       <!-- 按 Key -->
       <h4 style="margin: 16px 0 8px">按 API Key</h4>
@@ -146,7 +144,7 @@
         </el-table-column>
         <el-table-column label="Tokens" width="110">
           <template #default="{ row }">
-            {{ row.total_tokens }}<el-text v-if="row.estimated" type="info" size="small">（估算）</el-text>
+            {{ row.total_tokens }}<BaseHint v-if="row.estimated" inline text="（估算）" />
           </template>
         </el-table-column>
         <el-table-column label="耗时" width="90">
@@ -174,6 +172,8 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BasePagination from '@/components/base/BasePagination.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import { getUsageByKey, getUsageByUnit, getUsageLogs, getUsageByModel, getUsageSummary } from '@/api/usage'
 
 const range = ref('today')
