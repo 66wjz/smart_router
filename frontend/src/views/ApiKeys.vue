@@ -44,7 +44,7 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="暂无 API Key，请点击上方按钮新增" />
+        <BaseEmptyState description="暂无 API Key，请点击上方按钮新增" />
       </template>
     </el-table>
 
@@ -153,12 +153,14 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import { confirmDanger } from '@/components/base/BaseConfirm'
 import { addApiKey, deleteApiKey, listApiKeys, updateApiKey } from '@/api/apiKeys'
 import { listUpstreams } from '@/api/upstreams'
 import { reloadConfig } from '@/api/common'
@@ -287,9 +289,7 @@ async function showCopy(row: any) {
 }
 
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm(`确定删除 Key「${row.name}」吗？删除后客户端将无法使用此 Key 访问。`, '删除确认', {
-    type: 'warning',
-  })
+  if (!await confirmDanger(`确定删除 Key「${row.name}」吗？删除后客户端将无法使用此 Key 访问。`)) return
   await deleteApiKey(row.key)
   ElMessage.success('已删除')
   await reloadConfig()

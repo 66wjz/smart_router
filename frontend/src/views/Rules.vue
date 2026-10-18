@@ -6,7 +6,7 @@
 
     <!-- 规则卡片列表 -->
     <div v-loading="loading">
-      <el-empty v-if="!rules.length && !loading" description="暂无路由规则，请点击上方按钮新增" />
+      <BaseEmptyState v-if="!rules.length && !loading" description="暂无路由规则，请点击上方按钮新增" />
       <div v-for="(rule, i) in rules" :key="i" class="rule-card">
         <div class="rule-header">
           <div class="rule-title">
@@ -68,7 +68,7 @@
                 移除
               </BaseButton>
             </div>
-            <el-empty v-if="!ruleForm.candidates.length" description="暂无候选模型，请在下方添加" :image-size="40" />
+            <BaseEmptyState v-if="!ruleForm.candidates.length" description="暂无候选模型，请在下方添加" />
           </div>
         </el-form-item>
 
@@ -120,7 +120,7 @@
     <!-- YAML 编辑（高级） -->
     <el-collapse style="margin-top: 16px">
       <el-collapse-item title="YAML 编辑（高级）" name="yaml">
-        <el-alert title="直接编辑 JSON 格式的路由规则。修改后将整体保存并热重载。" type="info" :closable="false" style="margin-bottom: 12px" />
+        <BaseNotice title="直接编辑 JSON 格式的路由规则。修改后将整体保存并热重载。" />
         <BaseInput v-model="rulesYaml" type="textarea" :rows="14" placeholder="rules: [...]" />
         <div style="margin-top: 12px; display: flex; gap: 8px">
           <BaseButton variant="primary" :disabled="saving" @click="handleSaveYaml">
@@ -135,12 +135,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import BaseNotice from '@/components/base/BaseNotice.vue'
+import { confirmDanger } from '@/components/base/BaseConfirm'
 import { getRules, saveRules } from '@/api/rules'
 import { listUpstreams } from '@/api/upstreams'
 import { fetchUpstreamModels } from '@/api/aggregated'
@@ -317,7 +320,7 @@ async function handleSaveRule() {
 
 async function handleDeleteRule(i: number) {
   const rule = rules.value[i]
-  await ElMessageBox.confirm(`确定删除规则「${rule.name}」吗？`, '删除确认', { type: 'warning' })
+  if (!await confirmDanger(`确定删除规则「${rule.name}」吗？`)) return
   saving.value = true
   try {
     rules.value.splice(i, 1)

@@ -71,13 +71,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import BaseSidebar from '@/components/layout/BaseSidebar.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon from '@/components/base/BaseIcon.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseFormGroup from '@/components/base/BaseFormGroup.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { confirmAction } from '@/components/base/BaseConfirm'
 import { useUserStore } from '@/stores/user'
 import { changePassword } from '@/api/common'
 
@@ -150,11 +151,7 @@ onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 
 async function handleLogout() {
-  try {
-    await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
-  } catch {
-    return
-  }
+  if (!await confirmAction('确定退出登录吗？', '提示')) return
   userStore.logout()
   router.push('/login')
 }

@@ -24,7 +24,7 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="暂无模型别名，请点击上方按钮新增" />
+        <BaseEmptyState description="暂无模型别名，请点击上方按钮新增" />
       </template>
     </el-table>
 
@@ -94,11 +94,13 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import { confirmDanger } from '@/components/base/BaseConfirm'
 import { addPointer, deletePointer, listPointers, updatePointer } from '@/api/pointers'
 import { listUpstreams } from '@/api/upstreams'
 import { fetchUpstreamModels } from '@/api/aggregated'
@@ -191,7 +193,7 @@ async function handleEditSave() {
 }
 
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm(`确定删除别名「${row.name}」吗？`, '删除确认', { type: 'warning' })
+  if (!await confirmDanger(`确定删除别名「${row.name}」吗？`)) return
   await deletePointer(row.name)
   ElMessage.success('已删除')
   await reloadConfig()

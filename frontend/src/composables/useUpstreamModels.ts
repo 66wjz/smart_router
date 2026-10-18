@@ -7,6 +7,7 @@
 import { nextTick, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import Sortable from 'sortablejs'
+import { confirmDanger } from '@/components/base/BaseConfirm'
 import {
   deleteUpstreamModel,
   reorderUpstreamModels,
@@ -292,13 +293,7 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
   async function batchDelete(u: { id: string }) {
     const sel = selectedModels(u)
     if (!sel.length) return
-    try {
-      await ElMessageBox.confirm(`确定删除选中的 ${sel.length} 个模型吗？`, '批量删除确认', {
-        type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消',
-      })
-    } catch {
-      return
-    }
+    if (!await confirmDanger(`确定删除选中的 ${sel.length} 个模型吗？`, '批量删除确认')) return
     const newList = (modelsByUpstream[u.id] || []).filter((e) => !sel.includes(e.name))
     try {
       await updateUpstreamModels(u.id, newList)
@@ -417,13 +412,7 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
   const batchTest = (u: { id: string; name: string }) => testModels(u, selectedModels(u))
 
   async function removeModel(u: { id: string; name: string }, m: string) {
-    try {
-      await ElMessageBox.confirm(`确定从上游「${u.name}」移除模型「${m}」吗？`, '移除确认', {
-        type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消',
-      })
-    } catch {
-      return
-    }
+    if (!await confirmDanger(`确定从上游「${u.name}」移除模型「${m}」吗？`, '移除确认')) return
     try {
       await deleteUpstreamModel(u.id, m)
       modelsByUpstream[u.id] = (modelsByUpstream[u.id] || []).filter((x) => x.name !== m)

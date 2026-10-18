@@ -1,11 +1,6 @@
 <template>
   <div>
-    <el-alert
-      :title="`${plan.summary.unit_count} 个探测单元 · 去重省 ${plan.summary.dedup_saved} 次 · 每天约 ${plan.summary.daily_requests.toLocaleString()} 次请求 · 覆盖 ${plan.summary.aggregation_count} 个聚合`"
-      type="info"
-      :closable="false"
-      style="margin-bottom: 12px"
-    />
+    <BaseNotice :title="`${plan.summary.unit_count} 个探测单元 · 去重省 ${plan.summary.dedup_saved} 次 · 每天约 ${plan.summary.daily_requests.toLocaleString()} 次请求 · 覆盖 ${plan.summary.aggregation_count} 个聚合`" />
 
     <div class="sched-toolbar">
       <el-radio-group v-model="viewMode" size="small">
@@ -82,6 +77,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
+import BaseNotice from '@/components/base/BaseNotice.vue'
 import type { ProbePlan, ProbeSchedule, ProbeUnit } from '@/api/aggregations'
 
 const props = defineProps<{ plan: ProbePlan }>()

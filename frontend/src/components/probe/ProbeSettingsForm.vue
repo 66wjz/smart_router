@@ -69,7 +69,7 @@
             @update:model-value="(v: any) => patchSchedule({ days: v })">
             <el-checkbox v-for="d in DAY_OPTIONS" :key="d.value" :value="d.value">{{ d.label }}</el-checkbox>
           </el-checkbox-group>
-          <div class="hint">不勾选 = 每天都探测</div>
+          <BaseHint text="不勾选 = 每天都探测" />
         </el-form-item>
 
         <el-form-item label="时段窗口">
@@ -88,9 +88,7 @@
             <BaseButton variant="ghost" size="sm" :disabled="Boolean(form.template_id)" @click="addWindow">
               + 添加时段
             </BaseButton>
-            <div class="hint">
-              例：08:00→23:00 表示夜间不探测；23:00→07:00 表示只在这个跨夜时段探测。时段外保留最后一次结果并标记「时段外」。
-            </div>
+            <BaseHint text="例：08:00→23:00 表示夜间不探测；23:00→07:00 表示只在这个跨夜时段探测。时段外保留最后一次结果并标记「时段外」。" />
           </div>
         </el-form-item>
 
@@ -109,6 +107,7 @@
 
 <script setup lang="ts">
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
 import type { ProbeSchedule, ProbeTemplate } from '@/api/aggregations'
 
 export interface ProbeFormModel {
@@ -181,12 +180,6 @@ function applyPreset(kind: string) {
 </script>
 
 <style scoped>
-.hint {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  margin-top: 4px;
-  line-height: 1.5;
-}
 .window-list {
   display: flex;
   flex-direction: column;
