@@ -1,6 +1,6 @@
 # 项目流程状态
 
-> **当前版本：v5.2.0**（v5.1.0 于 2026-08-11 发布并打 tag；v5.2.0 为当前开发版本，待部署后打 tag；**仓库迁移中**：Gitee 转私有，主仓库改用 GitHub，待配置远端）
+> **当前版本：v5.2.0**（v5.1.0 于 2026-08-11 发布并打 tag；v5.2.0 为当前开发版本，待部署后打 tag；主仓库已迁 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库转私有）
 
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
