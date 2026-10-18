@@ -5,6 +5,20 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - 生产全量部署上线 v5.2.0（CH-020~CH-032 累计 13 项）
+- 前置：用户授权部署（明确「原来怎么部署的就怎么部署」），并提供 SSH 凭据（root / 10.10.0.2:22）
+- **只读勘察先行**（未改任何东西）：`test/deploy_probe_prod.py` 摸清生产现状 → 发现三处与预期不符的关键事实：①生产 python 是 `/opt/smart-router/backend/.venv/bin/python`（不是历史脚本里的 `/root/miniconda3`）；②`systemd` 以 `User=wjz666123` 运行（不是 root，上传后必须 chown）；③生产库只有 10 张表，**缺 `agg_model_group`/`agg_unified`/`agg_probe_config`/`agg_probe_template`**
+- **推翻原部署方式**（铁律：先定位再改）：原脚本是「逐文件增量」，但 CH-026 新增了 4 个 config mixin、CH-023/024 含表结构与数据迁移 → 逐文件必漏。改为**整树同步**（backend + sql + dist 三个 tar）
+- **定位部署阻断级风险**：新代码在**模块导入期**（`app.core.config` 的 `AppConfig.__init__` → `load()`）就会读全部表；生产库缺 4 张表 → 任一 repo 抛 `OperationalError` → `load()` 的 except 分支把 `_upstreams/_rules/_api_keys` **全部清空** → 网关全量 401。且 `main.py` 的 `startup()` 里 `config.load()` 与 `sync_unified_tables()` 同处一个 try，迁移失败会**跳过** `load()`
+- **规避手段**：新增「预迁移」阶段——**重启前**先按 `sql/06 → increment/06 → 07 → 08` 顺序显式建表/迁移（顺序不可调换：06 建 `agg_model_group`/`agg_probe_config`，07 才引用它们）
+- **红线确认**：全程**未执行 `seed.py`**（`drop_all()` 会清空生产数据）
+- 部署 8 步，每步失败即中止，且中止点都在「已备份、未替换代码」之前 → 失败时生产仍跑旧版本：备份（sqlite3 **在线备份 API**，WAL 下安全）→ 传 sql → 预迁移 → 传 backend → 替换 dist → 清 pycache + chown → `compileall` 预检 → 重启 + 验证
+- 结果：4 个迁移脚本全 `APPLIED ok`（8/3/7/2 条），表 10 → 14 张，`agg_unified` 3 行（由 `agg_aggregated_name` 迁移），`rule_bindings` 与 `log_usage.upstream_model` 列已补
+- 验证：启动日志 `配置已加载: 1 上游源, 3 规则, 4 密钥, 0 别名, 3 聚合`（配置完整，非空）；`文件日志已启用`（CH-025）、`已自动生成 JWT 密钥`（CH-032）、`v5.2.0 启动`；10 个管理端点全 200；入口冒烟 `/` 200、`/health` 200、登录 200、无 Key 401（全程无 500）
+- 备份：`/opt/smart-router/backup/20261018-210217`（DB 960K + 代码/前端 504K）
+- 关键判断：**老库升级时，「表结构不完整」比「代码写错」更隐蔽** —— 代码错会报错，表缺失走的是 `except OperationalError → 置空` 的静默降级路径，表现为「服务启动正常但业务全废」。因此升级顺序必须是**先补结构、再上代码**
+- 教训：`--dry-run` 与只读勘察都要先跑；若直接照搬历史脚本，会因 python 路径错误与属主问题踩坑
+
 ### 2026-10-18 - CH-032 JWT 签名密钥动态化
 - 背景：CH-031 推送 GitHub 时发现 `security.py` 硬编码 `JWT_SECRET`，用户明确「这种肯定不行」，要求先改完再谈部署
 - 先写变更文档再改代码（铁律 7：B 线必须先文档）：`docs/_changes/CH-032-JWT密钥动态化.md`

@@ -111,7 +111,16 @@ npm run build                 # 产出 dist（后端生产模式直接托管）
 systemd 服务：smart-router（:10002，Restart=always）
 ```
 
-增量部署脚本见 `test/deploy_*_incremental.py`（paramiko SFTP 上传 + 服务器侧 py_compile 预检 + systemctl 重启 + 健康验证）。
+部署脚本：
+
+| 脚本 | 用途 |
+|------|------|
+| `test/deploy_probe_prod.py` | **只读勘察**生产现状（目录/文件树/表结构/systemd 配置），部署前必跑 |
+| `test/deploy_v520_full.py` | **全量部署**（整树同步）：备份 → 传 sql → 预迁移 → 传代码 → 替换 dist → chown → 语法预检 → 重启验证；每步失败即中止 |
+
+> **两条硬约束**：
+> 1. **绝不在有数据的库上执行 `seed.py`** —— `drop_all()` 会先删全部表再重建，生产数据全丢。
+> 2. **老库升级必须先补表结构再上代码** —— 新代码在模块导入期就会读全部表，表缺失会让配置加载走静默降级分支（`except OperationalError → 置空`），表现为「服务启动正常但业务全废」。缺失结构由 `sql/06` 与 `sql/increment/06~08` 的幂等脚本补齐。
 
 #### 环境变量
 

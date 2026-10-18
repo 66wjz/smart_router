@@ -1,6 +1,6 @@
 # 项目流程状态
 
-> **当前版本：v5.2.0**（v5.1.0 于 2026-08-11 发布并打 tag；v5.2.0 为当前开发版本，待部署后打 tag；主仓库已迁 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库转私有）
+> **当前版本：v5.2.0**（v5.1.0 于 2026-08-11 打 tag；**v5.2.0 已于 2026-10-18 全量部署上线** 10.10.0.2:10002，待打 tag；主仓库 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库已转私有）
 
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-18（CH-032）
+- 上次更新：2026-10-18（v5.2.0 全量部署上线）
 
 ## 补建说明
 
@@ -48,7 +48,8 @@
 | CH-029 | 部署前收尾（A 线 + B 线-小）：`seed.py` 补齐增量 01~08（修全新环境缺 `up_upstream_key` 表与 4 列导致启动崩溃）+ `drop_all` 补全 13 张表 + 支持 `SMART_ROUTER_DB` + 版本号统一 v5.2.0（run.py / STATE / pyproject / package.json）+ `start.bat` 指向 v5 + 数据库设计 SQL 清单与 sys_setting 键补全 + API契约修正拉取模型实现方式 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-030 | 清理 v4 遗留 + 登记待办 + 补文档（B 线-小）：删除 `router.py` / `core/` / `upstream/` / `admin/` / `.streamlit/` / `config.example.yaml` / `test_router.py`（实测 0 活引用）+ 需求规格新增第九节「待完善事项」登记 `auto_same_name` 开关缺口 + 补 `smart-retry` 的 API契约/接口文档 + README 文档索引清理 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-031 | 仓库迁移 GitHub + 历史隐私清洗（B 线-小）：`git-filter-repo` 替换历史中 CH-016 硬编码的管理员密码与客户端 Key（已双备份）+ 移除内嵌明文密码的 Gitee remote + 提交作者邮箱脱敏为 noreply + 全历史复扫 0 命中 + HEAD 树对象与清洗前一致 + 新远端 GitHub | ✅ 已实现（2026-10-18），已归档；**已 push GitHub，未部署** | 本地（已推送 GitHub） |
-| CH-032 | JWT 签名密钥动态化（B 线-小）：删除源码硬编码 `JWT_SECRET`，改为 `SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动自动生成并落库；进程内缓存 + 降级容错；旧密钥签发的 token 全部失效 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署**（升级后需重新登录一次） | 本地 |
+| CH-032 | JWT 签名密钥动态化（B 线-小）：删除源码硬编码 `JWT_SECRET`，改为 `SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动自动生成并落库；进程内缓存 + 降级容错；旧密钥签发的 token 全部失效 | ✅ 已实现+本地验证（2026-10-18），已归档；**已随 v5.2.0 部署上线** | 生产 |
+| — | **v5.2.0 全量部署上线**：CH-020~CH-032 累计 13 项一次性上线（含 CH-023 聚合统一 + CH-026 组件化拆分 + CH-029 建库修复 + CH-031 仓库迁移 + CH-032 JWT 动态化） | ✅ 已部署 10.10.0.2:10002（2026-10-18），全端点复验通过 | 生产 |
 
 ## 历史经验参考
 
@@ -95,3 +96,5 @@
 - 2026-10-17：**CH-024 完成本地实现+验证并归档（未 push、未部署）**：用户指出 CH-023 只统一了「rule 聚合」的名字、没统一行为（所有 rule 聚合共用全局规则与同一份候选、无法裁剪、无法新建 rule 类型）。按用户方案实施「一张路由规则表 + 每个聚合引用其子集」：①数据层——`agg_unified` 加 `rule_bindings` TEXT 列（增量 SQL 08），三分语义 `NULL`/`[]` = 全跟随、`[{rule, candidates: null}]` = 规则子集且候选全跟随、显式候选子集；②路由——`get_ordered_candidates(..., aggregation=聚合名)` 先按绑定裁剪规则与候选，之后排序逻辑一行未改；③探测——`rule_candidate_units(aggregation)` 按绑定算单元，各聚合探测成本可区分；④规则变更联动——`set_rules()` 后 `prune_rule_bindings()` 清理已删/改名规则引用（清空回退全跟随），响应带 `affected_aggregations`；⑤失效检测——`rule_binding_issues()` 检出 `rule_missing`/`candidate_missing`，列表返回 `stale_bindings` 供卡片黄标；⑥前端——新建/编辑弹窗加「聚合类型」单选 + 绑定编辑器（规则卡片：使用勾选/候选复选框/跟随徽标/全选）+ 卡片绑定摘要 + 失效黄标。修复：前端 rule 类型保存被后端拒（`saveEdit()` 无条件发 `members: []`，改 rule 类型不发该字段）。验证：`verify_rule_binding_ch024.py` 8 组全通过、CH-023 三套回归全通过、`npm run build` 通过、demo 库浏览器实测通过；同步 10 份文档并归档
 - 2026-10-18：**CH-031 仓库迁移与历史隐私清洗（已 push GitHub，未部署）**：推送前隐私审查发现 git 历史中 `test/verify_prod_ch016.py` 在 CH-016 提交里硬编码管理员密码与客户端 Key（CH-018 已改环境变量但历史可查），`.git/config` 远端 URL 内嵌明文 Gitee 账号密码。处理：①双重备份（文件副本 + git bundle，均在项目目录外）；②`git filter-repo` 替换为占位符，27 提交重写；③移除凭据 remote；④提交作者邮箱（手机号@qq.com）脱敏为 GitHub noreply；⑤全历史复扫密码/Key/账号/手机号 0 命中，HEAD 树对象与清洗前完全一致；⑥新远端 `https://github.com/66wjz/smart_router.git` 并推送 main。用户决定 Gitee 转私有、不轮换凭据（局域网部署），JWT 密钥硬编码问题登记到需求规格 9.2 待改
 - 2026-10-18：**CH-025 完成本地实现+验证并归档（已 push、未部署）**：用户反馈三类问题（新建聚合保存按钮卡「保存中」/ 复制 Key 弹确认框 / 请求频繁中断报 500）。①取证——连生产 10.10.0.2 取 journal（持久化完好、重启未丢），500 仅集中在 10-16（部署事故 + JSONDecodeError），拿到堆栈直指 `chat.py:23`，对照三入站发现仅 chat 缺 try；②A 线——`savingName` 与 `editName` 同为 `''` 导致按钮恒 disabled，改独立 `savingEdit`；③B 线——`showCopy()` 去 `ElMessageBox.confirm` 直接复制；④C1——三入站统一请求体校验（非 JSON / 非对象 / 缺 model / messages 非数组 → 400）；⑤C1b——`messages: null` 时 `get(k, [])` 返回 `None` → `for None` 崩，给 `estimate_tokens`/`extract_text`/`has_image` 补类型防御；⑥C2——`@app.exception_handler(Exception)` 按入站协议返回规范错误体；⑦C3——新增 `core/logging_setup.py`（ReqeustContextMiddleware 纯 ASGI 缓存请求体 + access 日志含 model/stream/messages/body 摘要 + `sk-` 脱敏 + RotatingFileHandler 10MB×5）+ `GET /admin/api/logs`、`/logs/info`。验证：畸形请求六种三入站全 400 零 500、503/401 规范错误体、日志脱敏生效、日志接口正常、浏览器实测保存按钮可点、CH-024 + CH-023 三套回归全通过、`npm run build` 通过；同步 9 份文档并归档。遗留：流式转发 `try_stream` 的 `send()` 无 `wait_for` 保护（生产 44 次 >60s、最长 219s），待用户确认后单独处理
+- 2026-10-18：**CH-032 JWT 签名密钥动态化（已实现，随 v5.2.0 上线）**：删除 `security.py` 硬编码 `JWT_SECRET`，改为三级取值 `SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动 `secrets.token_urlsafe(48)` 自动生成并落库；进程内缓存 + `threading.Lock` 防并发重复生成；数据库不可用时降级为进程内随机密钥并 WARNING（服务不崩）；`main.py` 删死导入并在 startup 预热。核心约束是「不硬编码」与「重启不踢人」同时满足。验证：7 项单元（含旧硬编码密钥伪造的 token 失效）+ 真实 uvicorn 重启后旧 token 仍有效 + 四套回归全通过 + `compileall` 0 错误
+- 2026-10-18：**v5.2.0 全量部署上线（用户授权）**：生产停在 CH-019 一期，累计 13 项变更一次性上线。①推翻原「逐文件增量」方式——CH-026 新增 4 个 config mixin、CH-023/024 含表结构与数据迁移，逐文件必漏，改**整树同步**；②明确红线——**绝不在生产跑 `seed.py`**（`drop_all()` 会清空生产数据）；③**排查出高危点并规避**——生产库缺 `agg_model_group`/`agg_unified`/`agg_probe_config`/`agg_probe_template` 四表，而新代码在**模块导入期**即调用 `config.load()`，任一 repo 抛 `OperationalError` 会让 load() 把上游源/规则/API Key 全部清空 → 网关全量 401；且 `startup()` 中 `config.load()` 与 `sync_unified_tables()` 同处一个 try，迁移失败会跳过 load()。故改为**重启前显式预迁移**（sql/06 → increment/06 → 07 → 08）；④部署 8 步：备份（sqlite3 在线备份 API）→ 传 sql → 预迁移 → 传代码 → 替换 dist → 清 pycache + chown → compileall 预检 → 重启验证，每步失败即中止且中止点均在替换代码之前；⑤新增 `test/deploy_v520_full.py`（全量）与 `test/deploy_probe_prod.py`（只读勘察）。验证：4 个迁移脚本全 `APPLIED`，表增至 14 张，`agg_unified` 3 行；启动日志 `配置已加载: 1 上游源, 3 规则, 4 密钥, 0 别名, 3 聚合`（配置完整）；10 个管理端点全 200；入口冒烟 `GET /` 200、`/health` 200、登录 200、无 Key 401（无 500）。备份 `/opt/smart-router/backup/20261018-210217`
