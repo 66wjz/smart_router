@@ -50,6 +50,9 @@ async def list_models(request: Request):
             result["data"].insert(0, entry)
 
     # 聚合模型条目
+    # CH-033：rule 聚合来自 aggregated_names；static 聚合（含异名聚合）不在其中，
+    # 必须单独遍历 agg_unified，否则聚合名虽然在路由里可用，却不会出现在模型列表。
+    existing_ids = {m["id"] for m in result["data"]}
     for agg_name in cfg.aggregated_names:
         ctx_values, output_values = [], []
         for rule in cfg.rules:
@@ -64,9 +67,30 @@ async def list_models(request: Request):
             "object": "model",
             "created": 0,
             "owned_by": "smart-router",
+            "type": "aggregation",
+            "aggregation_kind": "rule",
             "context_length": min(ctx_values) if ctx_values else None,
             "max_output": max(output_values) if output_values else None,
         }
         result["data"].insert(0, entry)
+        existing_ids.add(agg_name)
+
+    # static 聚合（固定成员 / 异名组合）
+    for name, entity in cfg.get_aggregations().items():
+        if entity.get("kind") != "static" or not entity.get("enabled", True):
+            continue
+        if name in existing_ids:
+            continue  # 与真实模型或 rule 聚合重名时不重复输出
+        members = entity.get("members") or []
+        result["data"].insert(0, {
+            "id": name,
+            "object": "model",
+            "created": 0,
+            "owned_by": "smart-router",
+            "type": "aggregation",
+            "aggregation_kind": "static",
+            "member_count": len(members),
+        })
+        existing_ids.add(name)
 
     return JSONResponse(status_code=200, content=result)

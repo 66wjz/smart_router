@@ -140,12 +140,14 @@ Header: `Authorization: Bearer <token>`
 - **鉴权**: 路由层 API Key
 - **分组过滤**: 仅返回该 Key 有权访问分组的上游模型（无 Key 返回 401）
 - **出参**: OpenAI models 列表 + 聚合模型条目 + 别名条目
+- **CH-033**: 聚合条目覆盖 **rule 与 static 两类**；static 聚合（含异名聚合）此前被遗漏，导致「聚合名可调用但在模型列表看不到」。聚合条目标记 `type: "aggregation"`，并用 `aggregation_kind` 区分 `rule` / `static`；`enabled=false` 的聚合不输出；与真实模型或另一聚合重名时只输出一次
 
 ```json
 {
   "object": "list",
   "data": [
-    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "context_length": 128000, "max_output": 65536 },
+    { "id": "deepseek-v4-1-flash", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "static", "member_count": 3 },
+    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "rule", "context_length": 128000, "max_output": 65536 },
     { "id": "my-model", "object": "model", "owned_by": "smart-router", "type": "pointer", "target_model": "deepseek-ai/deepseek-v4-pro" },
     { "id": "mistralai/mistral-large-...", "object": "model" }
   ]
@@ -587,6 +589,11 @@ Header: `Authorization: Bearer <token>`
 - **路径**: `DELETE /admin/api/aggregations?name={聚合名}`
 - **出参**: `{ "ok": true, "name": "..." }`
 - **错误码**: 404 聚合不存在
+- **CH-033 语义扩展**：
+  - 人工配置的聚合（`agg_unified` 有行）→ 直接删行，恢复为「自动发现」状态（若同名模型仍分布在 ≥2 个源）
+  - **自动发现的聚合**（无库行，由 `collect_group_members()` 即时推导）→ 落库一条 `enabled=false` 且成员为空的 static 行，语义为「关闭该聚合」；该聚合随后从列表、路由候选、探测计划中消失
+  - 该操作**可逆**：对关闭后的聚合调用 `PUT /admin/api/aggregations?name=xxx` 传 `enabled=true` 与成员即可恢复
+  - 重复删除同一自动发现聚合仍返回 200（幂等）
 
 #### 4.28.3.1 保存聚合列表顺序（CH-028）
 

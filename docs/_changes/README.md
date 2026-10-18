@@ -39,3 +39,4 @@
 | [CH-030](archived/CH-030-清理v4遗留与文档补全.md) | 清理 v4 遗留代码（`router.py` / `core/` / `upstream/` / `admin/` / `.streamlit/` / `config.example.yaml` / `test_router.py`）+ 登记 `auto_same_name` 待办 + 补 `smart-retry` API 文档 | 2026-10-18 | 已实现（本地验证通过，未 push 未部署） | README / 需求规格 / API契约 / 接口文档 / 变更记录 |
 | [CH-031](archived/CH-031-仓库迁移与历史隐私清洗.md) | 仓库迁移 GitHub + Git 历史隐私清洗（`git-filter-repo` 替换历史中的真实凭据 + 提交作者邮箱脱敏；移除内嵌密码的 Gitee remote） | 2026-10-18 | 已实现（已 push GitHub，未部署，已归档） | 需求规格 / 变更记录 / STATE / README |
 | [CH-032](archived/CH-032-JWT密钥动态化.md) | JWT 签名密钥动态化（`SR_JWT_SECRET` 环境变量 > `sys_setting.jwt_secret` > 首次启动自动生成并落库） | 2026-10-18 | 已实现（本地验证通过，未 push 未部署，已归档） | README / 需求规格 / 架构设计 / 数据库设计 / 变更记录 / STATE |
+| [CH-033](archived/CH-033-静态聚合不可见与自动发现聚合无法移除.md) | 静态聚合补入 `/v1/models`（A 线）+ 自动发现聚合支持「移除」（落库 `enabled=false`，B 线-小） | 2026-10-18 | 已实现（本地+生产验证通过，已部署） | API契约 / 接口文档 / 功能清单 / 变更记录 |

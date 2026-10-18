@@ -102,10 +102,33 @@ class AggregationConfigMixin:
         self._refresh_unified()
 
     def delete_aggregation(self, name: str) -> bool:
-        ok = self._repos["aggregation"].delete(name)
-        if ok:
+        """删除聚合。
+
+        CH-033：自动发现的同名聚合在 agg_unified 里没有行（由 collect_group_members()
+        即时推导），直接 DELETE 会删不到东西。此时改为落库一条 enabled=false 的
+        static 行，语义是「关闭该聚合」——既满足移除意图，又可逆（恢复自动 = 改回 true）。
+        """
+        if self._repos["aggregation"].delete(name):
             self._refresh_unified()
-        return ok
+            return True
+        if name not in self.collect_group_members():
+            return False
+        # 自动发现聚合：落库关闭，避免它继续出现在列表与路由候选里
+        self._repos["aggregation"].upsert(name, {
+            "kind": "static",
+            "members": [],
+            "rule_bindings": None,
+            "enabled": False,
+            "probe_enabled": False,
+            "template_id": None,
+            "sort_mode": "stable",
+            "interval_seconds": None,
+            "slow_threshold_seconds": None,
+            "schedule": {},
+            "remark": "已关闭（原自动发现聚合）",
+        })
+        self._refresh_unified()
+        return True
 
     def save_probe_template(self, data: dict, template_id: int | None = None) -> int:
         """新建或更新探测模板；返回模板 id"""

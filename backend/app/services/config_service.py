@@ -325,6 +325,11 @@ class ConfigService:
 
         result = []
         for name, entity in sorted(entities.items(), key=lambda kv: (kv[1].get("kind") != "static", kv[0])):
+            # CH-033：自动发现聚合被「移除」后会落一条 enabled=false + 空成员的 static 行，
+            # 它没有任何实际配置（正常的关闭聚合一定保留成员），不应再出现在列表里。
+            if (entity.get("kind") == "static" and not entity.get("enabled", True)
+                    and not (entity.get("members") or [])):
+                continue
             kind = entity.get("kind") or "static"
             settings = self.config.group_probe_settings(name)
             item = {
