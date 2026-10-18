@@ -912,7 +912,7 @@ Header: `Authorization: Bearer <token>`
 | 分组列表管理 | GET/PUT /admin/api/groups | sys_setting(groups) |
 | 模型列表按 Key 过滤 | GET /v1/models | up_upstream(groups), api_api_key(groups) |
 | 上游源增删查 | /admin/api/upstreams | up_upstream |
-| 拉取模型列表 | 前端直连上游 | up_upstream |
+| 拉取模型列表 | GET /admin/api/upstreams/{id}/models（后端代理请求上游 `/v1/models`，非前端直连） | up_upstream |
 | 规则可视化编辑 | GET/PUT /admin/api/rules | rule_rule, rule_candidate |
 | 规则 YAML 编辑 | GET/PUT /admin/api/rules | rule_rule, rule_candidate |
 | 别名增删改查 | /admin/api/model-pointers | pt_pointer |

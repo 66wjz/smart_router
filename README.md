@@ -73,8 +73,11 @@
 ### 本地运行
 
 ```bash
-# 后端（本地托管前端需指定 FRONTEND_DIST 指向构建产物）
+# 首次：初始化数据库（一次性建全表 + 种子数据 + 全部增量结构）
 cd backend
+uv run python seed.py
+
+# 后端（本地托管前端需指定 FRONTEND_DIST 指向构建产物）
 $env:FRONTEND_DIST = "../frontend/dist"   # Windows PowerShell；Linux 用 export
 uv run python run.py          # 监听 :10002
 

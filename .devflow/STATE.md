@@ -1,6 +1,6 @@
 # 项目流程状态
 
-> **当前版本：v5.1.0**（2026-08-11 发布，git tag v5.1.0；仓库 https://gitee.com/wang-jianzhou-66/smart_router）
+> **当前版本：v5.2.0**（v5.1.0 于 2026-08-11 发布并打 tag；v5.2.0 为当前开发版本，待部署后打 tag；仓库 https://gitee.com/wang-jianzhou-66/smart_router）
 
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-18（CH-028）
+- 上次更新：2026-10-18（CH-029）
 
 ## 补建说明
 
@@ -45,6 +45,7 @@
 | CH-026 | 代码治理与组件化（B 线-大，纯重构行为零变更）：超长文件拆分（`Aggregated.vue` 1347→520、`Upstreams.vue` 1056→215、`Dashboard.vue` 688→395、`config.py` 1019→208 门面+4 mixin、`anthropic_adapter` 791→352、`responses_adapter` 695→311）+ 基础组件补齐落地（BaseConfirm/BaseModalFooter/BaseHint/BaseNotice/BasePagination）+ 硬编码色值令牌化（`--chart-*`，修正 `--accent-yellow`→`--accent-amber`） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-027 | 界面一致性治理 + 流式响应头超时（B 线-小 + A 线）：四页新增按钮统一右上角（`BaseSection #actions`）+ 区块保存按钮统一左下角 + 按钮尺寸统一 `size="sm"`（热重载漏写 size 为根因）+ 弹窗底部统一 `BaseModalFooter` + 侧边栏导航项固定高度 36px 去抖动 + 三适配器 `try_stream` 补 `response_timeout`（等响应头阶段，与非流式对齐） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-028 | 后台交互补齐 + 聚合拖拽排序（A 线 + B 线-中）：分组管理「+ 添加分组」移右上角并改 primary 配色 + 全局容错三段表单 `label-width` 统一 160px（保存按钮对齐）+ 规则/别名候选模型改读库接口 `listSourceModels`（不再依赖上游可达）+ YAML 编辑改独立卡片 + 弹窗修改 + 聚合列表拖拽排序（`sys_setting.aggregation_order` + `PUT /admin/api/aggregations/order`） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
+| CH-029 | 部署前收尾（A 线 + B 线-小）：`seed.py` 补齐增量 01~08（修全新环境缺 `up_upstream_key` 表与 4 列导致启动崩溃）+ `drop_all` 补全 13 张表 + 支持 `SMART_ROUTER_DB` + 版本号统一 v5.2.0（run.py / STATE / pyproject / package.json）+ `start.bat` 指向 v5 + 数据库设计 SQL 清单与 sys_setting 键补全 + API契约修正拉取模型实现方式 | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 
 ## 历史经验参考
 
