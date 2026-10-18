@@ -20,7 +20,17 @@ def _openai_error(status_code: int, message: str) -> JSONResponse:
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     """OpenAI 兼容聊天补全：聚合路由 / 别名转发 / 直接透传 + 失败重试"""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return _openai_error(400, "请求体不是合法 JSON")
+    if not isinstance(body, dict):
+        return _openai_error(400, "请求体必须是 JSON 对象")
+    if not body.get("model"):
+        return _openai_error(400, "model 参数缺失")
+    if not isinstance(body.get("messages"), list):
+        return _openai_error(400, "messages 参数缺失或不是数组")
+
     key_groups = getattr(request.state, "key_groups", None)
     svc: RouterService = request.app.state.router_service
     try:

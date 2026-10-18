@@ -16,6 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from app.api import admin_router, v1_router
 from app.core.config import config
 from app.core.health import ModelHealth
+from app.core.logging_setup import (
+    RequestContextMiddleware,
+    describe_request,
+    setup_file_logging,
+)
 from app.core.probe import LatencyProbe
 from app.core.security import JWT_SECRET
 from app.core.usage import UsageBuffer, current_api_key_id, current_api_key_name
@@ -29,6 +34,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# 先 basicConfig 建控制台 handler，再挂文件 handler
+# （反过来会让 basicConfig 因 root 已有 handler 而静默失效）
+setup_file_logging()
 log = logging.getLogger("router")
 
 # ============================================================
@@ -51,6 +59,35 @@ app = FastAPI(title="Smart Router", version="5.2.0")
 # 挂载路由
 app.include_router(v1_router)
 app.include_router(admin_router)
+
+
+# ============================================================
+# 全局异常兜底（CH-025）
+# 未捕获异常不再返回裸 500 纯文本 —— 按入站协议路径返回规范化错误体，
+# 客户端（OpenAI / Anthropic / Responses SDK）才能解析出具体原因。
+# ============================================================
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    ctx = describe_request(request)
+    path = request.url.path
+    log.error(f"未捕获异常 | {request.method} {path} | {ctx}", exc_info=exc)
+
+    if path.startswith("/v1/messages"):
+        return JSONResponse(status_code=500, content={
+            "type": "error",
+            "error": {"type": "api_error", "message": f"中转站内部错误: {type(exc).__name__}"},
+        })
+    if path.startswith("/v1/responses"):
+        return JSONResponse(status_code=500, content={
+            "error": {"message": f"中转站内部错误: {type(exc).__name__}", "type": "api_error"},
+        })
+    if path.startswith("/v1/"):
+        return JSONResponse(status_code=500, content={
+            "error": {"message": f"中转站内部错误: {type(exc).__name__}",
+                      "type": "api_error", "code": 500},
+        })
+    return JSONResponse(status_code=500, content={"detail": "内部错误，请查看服务端日志"})
+
 
 # 生产模式静态托管：前端构建产物 frontend_dist 存在时启用（SPA fallback）
 DIST_DIR = Path(os.environ.get("FRONTEND_DIST", Path(__file__).resolve().parent.parent.parent / "frontend_dist"))
@@ -110,6 +147,11 @@ async def require_api_key(request: Request, call_next):
         current_api_key_id.set(api_key_id)
         current_api_key_name.set(key_entry.get("name", ""))
     return await call_next(request)
+
+
+# CH-025：请求上下文中间件（缓存 /v1 请求体 + 访问日志）
+# 放在 require_api_key 之后注册 → 位于更外层，401 被拦截的请求也能记到上下文
+app.add_middleware(RequestContextMiddleware)
 
 
 # ============================================================

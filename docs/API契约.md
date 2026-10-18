@@ -80,6 +80,23 @@ Header: `Authorization: Bearer <token>`
 
 > 无可用模型返回 503 + 上述各协议格式错误；客户端 SDK 可直接解析，不再出现"超时无反馈"。
 
+**请求体校验（CH-025）**：三个入站现在都对请求体做统一校验，畸形请求返回 **400**（此前 `/v1/chat/completions` 缺校验，非 JSON body 会变成无错误体的裸 500）：
+
+| 情况 | 返回 |
+|------|------|
+| body 不是合法 JSON | 400 各协议格式 `请求体不是合法 JSON` |
+| body 不是 JSON 对象（数组 / null / 字符串） | 400 `请求体必须是 JSON 对象` |
+| `model` 缺失 | 400 `model 参数缺失` |
+| `messages` 缺失或不是数组（仅 chat） | 400 `messages 参数缺失或不是数组` |
+
+**未捕获异常兜底（CH-025）**：服务端注册了全局异常处理器，任何未被业务捕获的异常按入站协议返回规范化错误体（HTTP 500），不再返回 FastAPI 默认的纯文本 `Internal Server Error`：
+
+| 入站 | 兜底错误格式 |
+|------|-------------|
+| OpenAI（/v1/chat/completions） | `{"error": {"message": "中转站内部错误: <异常类型>", "type": "api_error", "code": 500}}` |
+| Anthropic（/v1/messages） | `{"type": "error", "error": {"type": "api_error", "message": "中转站内部错误: <异常类型>"}}` |
+| Responses（/v1/responses） | `{"error": {"message": "中转站内部错误: <异常类型>", "type": "api_error"}}` |
+
 ---
 
 ## 二、客户端接口（/v1/）
@@ -655,6 +672,41 @@ Header: `Authorization: Bearer <token>`
 
 - **路径**: `POST /admin/api/usage/flush`
 - **出参**: `{ "ok": true }`
+
+### 4.32 运行日志读取（CH-025）
+
+- **路径**: `GET /admin/api/logs?lines={N}&keyword={关键词}`
+- **鉴权**: JWT
+- **说明**: 读取轮转日志文件（`logs/smart-router.log`）尾部，供不登录服务器也能拿到出错现场
+- **参数**:
+  - `lines`：返回行数，默认 200，上限 5000
+  - `keyword`：非空时只返回含该子串的行（如 `INVALID`、`status=500`、`ERROR`）
+- **出参**:
+
+```json
+{ "ok": true, "file": "/opt/smart-router/backend/logs/smart-router.log",
+  "size_bytes": 33819, "returned": 3, "keyword": "",
+  "content": "2026-10-18 12:48:51 [WARNING] access: POST /v1/chat/completions status=400 ..." }
+```
+
+- **日志内容说明**（CH-025 新增的请求上下文）:
+
+| 字段 | 含义 |
+|------|------|
+| `status` / `elapsed` | HTTP 状态码 / 耗时（秒） |
+| `client` | 客户端 IP |
+| `model` / `stream` | 请求的模型名 / 是否流式 |
+| `messages` | 消息条数（非数组时不输出） |
+| `body=INVALID(reason)` | 请求体无法解析，`reason` ∈ `empty` / `bad_json` / `not_object` |
+| `body_snippet` | 请求体摘要（截断 300 字符，`sk-xxx` 已脱敏） |
+
+- **文件策略**: `RotatingFileHandler`，单文件 10MB × 保留 5 份；可用环境变量 `SMART_ROUTER_LOG_DIR` 改目录
+
+### 4.33 日志文件信息（CH-025）
+
+- **路径**: `GET /admin/api/logs/info`
+- **鉴权**: JWT
+- **出参**: `{ "ok": true, "file": "...", "exists": true, "size_bytes": 33819 }`
 
 ### 4.6 路由规则列表
 

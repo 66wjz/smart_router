@@ -492,8 +492,8 @@
 
       <template #footer>
         <BaseButton variant="ghost" @click="editVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="savingName === editName" @click="saveEdit">
-          {{ savingName === editName ? '保存中…' : '保存' }}
+        <BaseButton variant="primary" :disabled="savingEdit" @click="saveEdit">
+          {{ savingEdit ? '保存中…' : '保存' }}
         </BaseButton>
       </template>
     </BaseModal>
@@ -545,6 +545,8 @@ const aggregations = ref<Aggregation[]>([])
 const suggestions = ref<any[]>([])
 const upstreams = ref<any[]>([])
 const savingName = ref('')
+/** 编辑弹窗独立保存态：不能复用 savingName（初值 '' 会让新建弹窗一开就卡「保存中」） */
+const savingEdit = ref(false)
 const merging = ref('')
 
 // ---------- 模板 ----------
@@ -1112,7 +1114,7 @@ async function saveEdit() {
     return ElMessage.warning('至少添加一个成员')
   }
 
-  savingName.value = name
+  savingEdit.value = true
   try {
     const payload: Record<string, unknown> = { kind: editKind.value, enabled: true }
     if (editKind.value === 'rule') {
@@ -1132,7 +1134,7 @@ async function saveEdit() {
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '保存失败')
   } finally {
-    savingName.value = ''
+    savingEdit.value = false
   }
 }
 

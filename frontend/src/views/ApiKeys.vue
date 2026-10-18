@@ -280,17 +280,10 @@ async function handleToggle(row: any) {
   load()
 }
 
-function showCopy(row: any) {
-  ElMessageBox.confirm(`完整 Key: ${row.key}\n复制后请妥善保管。`, '复制 Key', {
-    confirmButtonText: '复制',
-    cancelButtonText: '取消',
-  })
-    .then(async () => {
-      const ok = await copyToClipboard(row.key)
-      if (ok) ElMessage.success('已复制到剪贴板')
-      else ElMessage.error('复制失败，请手动选择复制')
-    })
-    .catch(() => {})
+async function showCopy(row: any) {
+  const ok = await copyToClipboard(row.key)
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.error('复制失败，请手动选择复制')
 }
 
 async function handleDelete(row: any) {

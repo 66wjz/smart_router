@@ -45,6 +45,10 @@ async def messages(request: Request):
         return JSONResponse(status_code=400, content={
             "type": "error", "error": {"type": "invalid_request_error", "message": "请求体不是合法 JSON"},
         })
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=400, content={
+            "type": "error", "error": {"type": "invalid_request_error", "message": "请求体必须是 JSON 对象"},
+        })
     if not body.get("model"):
         return JSONResponse(status_code=400, content={
             "type": "error", "error": {"type": "invalid_request_error", "message": "model 参数缺失"},

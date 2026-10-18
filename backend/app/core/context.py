@@ -13,10 +13,16 @@ def estimate_tokens(messages: list) -> int:
     粗略估算请求的 token 数。
     规则：中文约 1.5 字/token，英文/代码约 4 字符/token，取混合平均值约 2 字符/token。
     图片按每张 768 tokens 估算（保守值）。
+
+    messages 非列表（客户端传 null 等）时按空处理，避免 for None 崩溃（CH-025）。
     """
+    if not isinstance(messages, list):
+        return 0
     total_chars = 0
     image_count = 0
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             total_chars += len(content)
@@ -34,8 +40,12 @@ def estimate_tokens(messages: list) -> int:
 
 def extract_text(messages: list) -> str:
     """从 messages 中提取所有文本内容，用于关键词匹配"""
+    if not isinstance(messages, list):
+        return ""
     texts = []
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             texts.append(content)
@@ -48,7 +58,11 @@ def extract_text(messages: list) -> str:
 
 def has_image(messages: list) -> bool:
     """检测 messages 中是否包含图片"""
+    if not isinstance(messages, list):
+        return False
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content", "")
         if isinstance(content, list):
             for part in content:

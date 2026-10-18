@@ -5,6 +5,15 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - CH-025 取证（问题 3 日志排查）
+- 背景：用户报「WebSocket error: Network IO error: error sending request for url (http://10.10.0.2:10002/v1/chat/completions) (HTTP Status: 500)」，要求先分析
+- 连接生产 10.10.0.2 取 journal 日志（paramiko/py3.12，SSH root）：journald 持久化（`/var/log/journal` 存在、Storage=auto），覆盖 9/21 至今；服务今早 09:57 重启，boot -1 日志完整保留 → **重启未冲掉日志**
+- 全量状态码统计：500 仅集中在 10-16（19:48~19:54 共 34 个 = CH-019 部署事故的 `TypeError: ModelHealth.record_success()`，FB-022 已修；20:03:48/49/51 共 3 个 = `json.decoder.JSONDecodeError`）。10-15/10-17 的 502/503 是上游不可用后的正常容错返回
+- 拿到 JSONDecodeError 完整堆栈，直指 `app/api/v1/chat.py:23  body = await request.json()`；对照三入站：messages.py / responses.py 都包了 try 返回规范 400，**仅 chat.py 裸调用** → 非 JSON body 必成裸 500（无错误体，客户端只能报 Network IO error）
+- 今日（10-18）复查：311×200 + 31×304，**0 个 500 / 0 个 Traceback / 0 个 WARNING**；服务 NRestarts=0；上游 8326 = `node dsh web`（即 dsh 自身）
+- 结论：日志本身够用（能定位到行），但**缺请求上下文**（无 body / headers / 协议），无法得知客户端发了什么才触发 → 需补结构化请求日志；`chat.py` 裸 500 为已证实缺陷
+- 产出：CH-025 = A（新建聚合保存按钮卡「保存中」）+ B（复制 Key 去确认弹窗）+ C1（chat.py 补 try）+ C2（全局异常兜底）+ C3（请求上下文日志落文件）
+
 ### 2026-10-16 - CH-019 部署事故修复（FB-022，A 线）+ CH-019 收口待办登记
 - 背景：另一 AI 会话承接 CH-019（B 线-大），在未完成实施验证的情况下执行了增量部署（test/deploy_ch019_incremental.py）至 Ubuntu 生产，上线即 /v1/chat 全 500
 - 三处部署缺口定位（journalctl traceback + ss + unit 对读）：①上传清单漏 app/upstream/ 三个适配器 → 新 ModelHealth.record_success(upstream_id, model) 签名 vs 旧调用 record_success(model) → 每请求必炸；②迁移步骤写死阿里云旧机 /root/miniconda3/bin/python（Ubuntu 无）→ SQL 06 静默未执行；③前端传至 frontend_dist/ 而 systemd FRONTEND_DIST 指向 frontend/dist 且未 daemon-reload → 生产一直跑旧前端
