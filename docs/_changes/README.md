@@ -37,4 +37,4 @@
 | [CH-028](archived/CH-028-后台交互补齐与聚合拖拽排序.md) | 分组按钮归位 + 全局容错保存按钮对齐 + 规则/别名候选改为可选 + YAML 编辑卡片化 + 聚合列表拖拽排序 | 2026-10-18 | 已实现（本地验证通过，未 push 未部署） | 需求规格 / 架构设计 / 数据库设计 / API契约 / 接口文档 / 功能清单 / 五列矩阵 / 变更记录 |
 | [CH-029](archived/CH-029-部署前收尾建库修复与版本统一.md) | 部署前收尾：`seed.py` 补齐增量 01~08（修复全新环境启动崩溃）+ drop_all 补全 + 支持 `SMART_ROUTER_DB` + 版本号统一 v5.2.0 + 文档补全 | 2026-10-18 | 已实现（本地验证通过，未 push 未部署） | README / 数据库设计 / API契约 / 变更记录 |
 | [CH-030](archived/CH-030-清理v4遗留与文档补全.md) | 清理 v4 遗留代码（`router.py` / `core/` / `upstream/` / `admin/` / `.streamlit/` / `config.example.yaml` / `test_router.py`）+ 登记 `auto_same_name` 待办 + 补 `smart-retry` API 文档 | 2026-10-18 | 已实现（本地验证通过，未 push 未部署） | README / 需求规格 / API契约 / 接口文档 / 变更记录 |
-| [CH-031](archived/CH-031-仓库迁移与历史隐私清洗.md) | 仓库迁移 GitHub + Git 历史隐私清洗（`git-filter-repo` 替换历史中的真实凭据；移除内嵌密码的 Gitee remote） | 2026-10-18 | 已实现（本地清洗完成，未配置远端、未 push 未部署，已归档） | 变更记录 / STATE / README |
+| [CH-031](archived/CH-031-仓库迁移与历史隐私清洗.md) | 仓库迁移 GitHub + Git 历史隐私清洗（`git-filter-repo` 替换历史中的真实凭据 + 提交作者邮箱脱敏；移除内嵌密码的 Gitee remote） | 2026-10-18 | 已实现（已 push GitHub，未部署，已归档） | 需求规格 / 变更记录 / STATE / README |

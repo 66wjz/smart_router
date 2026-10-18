@@ -13,8 +13,12 @@
 - 清洗：规则文件写在 `.git/replace-rules.txt`（不受 git 跟踪，避免自己泄露），`git filter-repo --replace-text` 把真实密码/Key 替换为 `CHANGE-ME-ADMIN-PASSWORD` / `sk-CHANGE-ME-CLIENT-KEY`；27 个提交 0.41s 重写完成；`origin` 按设计被移除
 - 验证：4 个敏感值（管理员密码 / 客户端 Key / Gitee 账号 / Gitee 密码）全历史 `git grep --fixed-strings` 扫描 **0 命中**；清洗前后 HEAD 树对象完全一致（`3957e9f3…`）→ 内容零变化；提交数 27 不变、`v5.1.0` 标签保留；`git status` 干净（294 文件）
 - 收尾：临时规则文件已删除；`.git/config` 只剩 core/user/branch，无任何 URL 与密码；失效的 `backup-before-clean` 分支删除（旧 hash 已随重写消失）
+- 第二轮：提交作者邮箱是「手机号@qq.com」，用 `--mailmap` 全量改为 `wangjianzhou <66wjz@users.noreply.github.com>`；又因为变更文档里自己写了手机号，追加一次 `--replace-text` 扫尾（**教训：写脱敏记录时不能把真值再抄一遍**）
+- 远端：`git remote add origin https://github.com/66wjz/smart_router.git`（URL 无凭据），`git push -u origin main` 成功；本地 `user.email` 也改为 noreply（仓库级，未动全局）
+- 推送后复扫：4 个敏感值 + 提交元数据全部 0 命中；提交 31、跟踪文件 295、`v5.1.0` 标签保留
+- 推送时新发现：`backend/app/core/security.py:13` 的 `JWT_SECRET` 硬编码，任何人拿到源码可伪造管理台 token → 登记到 `docs/需求规格.md` 9.2，列入后续 B 线-小（用户明确「这种肯定不行，后面要改」）
 - 关键判断：**历史清洗必须在 push 之前做**——一旦旧历史推到远端，force push 也难保干净（平台缓存 / 他人克隆 / fork）。本次恰好从未成功推送过含凭据的提交，成本最低
-- 未做：不配置 GitHub 远端、不 push、不部署（等用户提供仓库地址 + 明确授权）
+- 未做：未部署（部署需用户另行授权）
 
 ### 2026-10-18 - CH-030 清理 v4 遗留 + 登记待办 + 补文档
 - 背景：CH-029 收尾列了 4 项遗留，用户逐项决策（部署脚本待部署时重写 / v4 代码删掉 / `auto_same_name` 登记待办 / 补 `smart-retry` 文档）
