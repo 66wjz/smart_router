@@ -42,6 +42,7 @@ backend/.venv/
 # 前端
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
