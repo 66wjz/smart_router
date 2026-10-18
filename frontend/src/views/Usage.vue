@@ -197,7 +197,7 @@ const rateColor = computed(() => {
   const r = summary.value.success_rate
   if (r === null) return 'var(--text-primary)'
   if (r >= 0.99) return 'var(--accent-green)'
-  if (r >= 0.9) return 'var(--accent-yellow, #e6a23c)'
+  if (r >= 0.9) return 'var(--accent-amber)'
   return 'var(--accent-red)'
 })
 

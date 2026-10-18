@@ -59,8 +59,8 @@
       <BaseSection variant="card" title="近 7 天用量趋势">
         <template #actions>
           <div class="legend">
-            <span class="lg-item"><i class="lg-dot" style="background:#4f8cff"></i>请求数</span>
-            <span class="lg-item"><i class="lg-dot" style="background:#8f6cff"></i>Tokens</span>
+            <span class="lg-item"><i class="lg-dot dot-req"></i>请求数</span>
+            <span class="lg-item"><i class="lg-dot dot-tok"></i>Tokens</span>
           </div>
         </template>
         <div v-if="hasTrend" class="chart-wrap">
@@ -69,8 +69,8 @@
                :style="{ width: '100%', height: '180px' }" class="trend-svg">
             <defs>
               <linearGradient id="gReq" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#4f8cff" stop-opacity="0.26" />
-                <stop offset="100%" stop-color="#4f8cff" stop-opacity="0" />
+                <stop offset="0%" class="grad-req-start" />
+                <stop offset="100%" class="grad-req-end" />
               </linearGradient>
             </defs>
             <!-- 网格线 -->
@@ -78,14 +78,14 @@
                   :y1="gridY(g)" :y2="gridY(g)" class="grid-line" />
             <!-- 请求数面积 + 折线 -->
             <polygon :points="reqArea" fill="url(#gReq)" />
-            <polyline :points="reqLine" fill="none" stroke="#4f8cff" stroke-width="2" stroke-linejoin="round" />
+            <polyline :points="reqLine" fill="none" stroke-width="2" stroke-linejoin="round" class="line-req" />
             <!-- Tokens 折线（虚线） -->
-            <polyline :points="tokLine" fill="none" stroke="#8f6cff" stroke-width="2"
-                      stroke-dasharray="4 3" stroke-linejoin="round" opacity="0.85" />
+            <polyline :points="tokLine" fill="none" stroke-width="2"
+                      stroke-dasharray="4 3" stroke-linejoin="round" opacity="0.85" class="line-tok" />
             <!-- 数据点 + 原生 tooltip -->
             <g v-for="(p, i) in points" :key="'p' + i">
-              <circle :cx="p.x" :cy="p.ry" r="3.2" fill="#4f8cff" />
-              <circle :cx="p.x" :cy="p.ty" r="2.6" fill="#8f6cff" />
+              <circle :cx="p.x" :cy="p.ry" r="3.2" class="dot-req-fill" />
+              <circle :cx="p.x" :cy="p.ty" r="2.6" class="dot-tok-fill" />
               <rect :x="p.x - 22" :y="0" width="44" height="26" fill="transparent">
                 <title>{{ p.label }}：{{ p.requests }} 次 / {{ formatTokens(p.tokens) }} tokens</title>
               </rect>
@@ -272,7 +272,7 @@ const rateColor = computed(() => {
   const r = usage7d.value.success_rate
   if (r === null || r === undefined) return 'var(--text-primary)'
   if (r >= 0.99) return 'var(--accent-green)'
-  if (r >= 0.95) return 'var(--accent-yellow, #e6a23c)'
+  if (r >= 0.95) return 'var(--accent-amber)'
   return 'var(--accent-red)'
 })
 
@@ -379,7 +379,15 @@ function gridY(i: number): number {
   return PAD_T + (innerH * i) / 4
 }
 
-const COLORS = ['#4f8cff', '#8f6cff', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4']
+/** 图表分类色：CSS 变量优先，取不到时回退到同色硬编码（导出/截图场景） */
+const COLORS = [
+  'var(--chart-line-1, #4f8cff)',
+  'var(--chart-line-2, #8f6cff)',
+  'var(--chart-cat-green, #22c55e)',
+  'var(--chart-cat-amber, #f59e0b)',
+  'var(--chart-cat-red, #ef4444)',
+  'var(--chart-cat-cyan, #06b6d4)',
+]
 function pickColor(i: number): string {
   return COLORS[i % COLORS.length]
 }
@@ -410,315 +418,4 @@ async function loadAll() {
 onMounted(loadAll)
 </script>
 
-<style scoped>
-.dash {
-  padding-bottom: 24px;
-}
-
-/* ---------- 健康条 ---------- */
-.health-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 16px;
-  border-radius: 10px;
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-  margin-bottom: 16px;
-}
-.health-bar.is-warn {
-  border-color: rgba(239, 68, 68, 0.28);
-  background: linear-gradient(90deg, rgba(239, 68, 68, 0.05), transparent 40%);
-}
-.hb-item {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 13px;
-}
-.hb-label {
-  color: var(--text-tertiary);
-}
-.hb-value {
-  font-weight: 600;
-}
-.hb-sub {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-.hb-sep {
-  width: 1px;
-  height: 14px;
-  background: var(--border-subtle);
-}
-.hb-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-  align-self: center;
-}
-.hb-dot.on { background: var(--accent-green); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16); }
-.hb-dot.off { background: var(--text-tertiary); }
-.hb-actions {
-  margin-left: auto;
-}
-
-/* ---------- 指标卡 ---------- */
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 14px;
-  margin-bottom: 16px;
-}
-.metric-card {
-  padding: 14px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-base);
-  cursor: pointer;
-  transition: border-color 0.16s, transform 0.16s;
-}
-.metric-card:hover {
-  border-color: var(--accent-blue, #4f8cff);
-  transform: translateY(-1px);
-}
-.mc-label {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-bottom: 6px;
-}
-.mc-value {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-.mc-delta {
-  font-size: 12px;
-  font-weight: 600;
-}
-.mc-delta.up { color: var(--accent-green); }
-.mc-delta.down { color: var(--accent-red); }
-.mc-sub {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 6px;
-}
-
-/* ---------- 两栏 ---------- */
-.two-col {
-  display: grid;
-  grid-template-columns: 3fr 2fr;
-  gap: 16px;
-}
-.legend {
-  display: flex;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.lg-item { display: inline-flex; align-items: center; gap: 5px; }
-.lg-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.axis-hint { font-size: 12px; color: var(--text-tertiary); }
-
-.chart-wrap { padding-top: 4px; }
-.trend-svg {
-  display: block;
-  overflow: visible;
-}
-.grid-line {
-  stroke: var(--border-subtle);
-  stroke-width: 1;
-  stroke-dasharray: 3 4;
-}
-.x-axis {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 8px 0;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-/* ---------- 贡献占比 ---------- */
-.share-list { display: flex; flex-direction: column; gap: 10px; }
-.share-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12.5px;
-  margin-bottom: 4px;
-}
-.share-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
-.share-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.share-num { color: var(--text-tertiary); }
-.share-track {
-  height: 6px;
-  border-radius: 4px;
-  background: var(--bg-hover);
-  overflow: hidden;
-}
-.share-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-.share-meta {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  margin-top: 3px;
-}
-.share-meta .err { color: var(--accent-red); }
-
-/* ---------- 上游卡片 ---------- */
-.up-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-.up-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: var(--bg-base);
-}
-.up-card.is-disabled { opacity: 0.55; }
-.up-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.up-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.up-dot.ok { background: var(--accent-green); }
-.up-dot.part { background: var(--accent-yellow, #e6a23c); }
-.up-dot.unknown { background: var(--text-tertiary); }
-.up-dot.off { background: var(--border-subtle); }
-.up-name {
-  font-weight: 600;
-  font-size: 13px;
-  margin-right: auto;
-}
-.up-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.up-stat { display: flex; flex-direction: column; }
-.us-num { font-size: 14px; font-weight: 700; }
-.us-label { font-size: 10.5px; color: var(--text-tertiary); }
-.up-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  padding-top: 8px;
-  border-top: 1px dashed var(--border-subtle);
-}
-.up-probe b.good { color: var(--accent-green); }
-.up-probe b.warn { color: var(--accent-yellow, #e6a23c); }
-.muted { color: var(--text-tertiary); }
-
-/* ---------- 聚合组 ---------- */
-.grp-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-.grp-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: var(--bg-base);
-}
-.grp-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.grp-model {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  font-weight: 600;
-}
-.grp-flow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 8px;
-}
-.grp-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-hover);
-  font-size: 11.5px;
-}
-.chip-src { color: var(--text-tertiary); }
-.grp-chip code { font-family: var(--font-mono, ui-monospace, monospace); }
-.grp-arrow { color: var(--text-tertiary); font-size: 11px; }
-.grp-foot {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.grp-foot b { color: var(--text-primary); }
-
-/* ---------- 待关注 ---------- */
-.attn-list { display: flex; flex-direction: column; gap: 6px; }
-.attn-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--bg-hover);
-  font-size: 12.5px;
-}
-.attn-tag {
-  flex: 0 0 auto;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.k-cooldown .attn-tag, .k-probe_down .attn-tag { background: rgba(239, 68, 68, 0.12); color: var(--accent-red); }
-.k-no_key .attn-tag, .k-stale .attn-tag { background: rgba(245, 158, 11, 0.14); color: #b45309; }
-.k-disabled_upstream .attn-tag { background: var(--bg-base); color: var(--text-tertiary); }
-.attn-target {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-weight: 600;
-}
-.attn-detail { color: var(--text-tertiary); }
-
-.empty-tip {
-  color: var(--text-tertiary);
-  font-size: 13px;
-  padding: 16px 0;
-  text-align: center;
-}
-
-@media (max-width: 1280px) {
-  .metric-grid { grid-template-columns: repeat(3, 1fr); }
-  .up-grid { grid-template-columns: repeat(2, 1fr); }
-  .two-col { grid-template-columns: 1fr; }
-}
-@media (max-width: 900px) {
-  .metric-grid { grid-template-columns: repeat(2, 1fr); }
-  .up-grid { grid-template-columns: 1fr; }
-  .grp-grid { grid-template-columns: 1fr; }
-}
-</style>
+<style scoped src="@/styles/dashboard.css"></style>
