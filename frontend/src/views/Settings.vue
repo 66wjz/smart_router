@@ -10,7 +10,7 @@
         text="这些参数对所有请求生效，与具体聚合无关：请求重试决定一次请求最多尝试几个候选；智能重试只对开启了该开关的上游源生效；故障转移决定模型与 Key 的冷却策略。" />
 
       <el-divider content-position="left">请求重试</el-divider>
-      <el-form :model="retryForm" label-width="140px">
+      <el-form :model="retryForm" label-width="160px">
         <el-row :gutter="16">
           <el-col :span="8">
             <el-form-item label="最大尝试次数">
@@ -64,7 +64,7 @@
       </el-form>
 
       <el-divider content-position="left">故障转移</el-divider>
-      <el-form :model="failoverForm" label-width="140px">
+      <el-form :model="failoverForm" label-width="160px">
         <el-row :gutter="16">
           <el-col :span="8">
             <el-form-item label="最大连续失败次数">
@@ -87,6 +87,9 @@
 
     <!-- 分组管理 -->
     <BaseSection variant="card" title="分组管理" style="margin-top: 16px">
+      <template #actions>
+        <BaseButton variant="primary" size="sm" @click="addGroup">+ 添加分组</BaseButton>
+      </template>
       <BaseHint block style="margin-bottom: 12px"
         text="上游源和 API Key 按分组做权限隔离：API Key 只能访问其所属分组的上游源。被上游源或 API Key 引用的分组不可删除。" />
       <el-table :data="groupsForm" size="small" style="margin-bottom: 12px">
@@ -107,7 +110,6 @@
         </el-table-column>
       </el-table>
       <div style="display: flex; gap: 8px; align-items: center">
-        <BaseButton variant="ghost" size="sm" @click="addGroup">+ 添加分组</BaseButton>
         <BaseButton variant="primary" size="sm" :disabled="savingGroups" @click="handleSaveGroups">
           {{ savingGroups ? '保存中...' : '保存分组' }}
         </BaseButton>

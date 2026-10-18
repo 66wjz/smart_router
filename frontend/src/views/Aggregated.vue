@@ -43,17 +43,19 @@
           <BaseEmptyState v-if="!aggregations.length" compact
             description="当前没有聚合。同一模型名只存在于一个源时不构成聚合；异名模型可手动创建。" />
 
-          <AggregationCard
-            v-for="g in aggregations"
-            :key="g.name"
-            :g="g"
-            :saving="savingName === g.name"
-            @toggle="(v: boolean) => toggleGroup(g, v)"
-            @probe="openProbe(g)"
-            @edit="g.kind === 'static' ? openEdit(g) : openEditRuleGroup(g)"
-            @remove="removeGroup(g)"
-            @reset="resetGroup(g)"
-          />
+          <div v-else ref="aggListRef" class="agg-list">
+            <AggregationCard
+              v-for="g in aggregations"
+              :key="g.name"
+              :g="g"
+              :saving="savingName === g.name"
+              @toggle="(v: boolean) => toggleGroup(g, v)"
+              @probe="openProbe(g)"
+              @edit="g.kind === 'static' ? openEdit(g) : openEditRuleGroup(g)"
+              @remove="removeGroup(g)"
+              @reset="resetGroup(g)"
+            />
+          </div>
         </BaseSection>
       </el-tab-pane>
 
@@ -169,9 +171,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import Sortable from 'sortablejs'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
@@ -196,6 +199,7 @@ import {
   listAggregations,
   listProbeTemplates,
   listRuleUnits,
+  reorderAggregations,
   saveAggregation,
   type Aggregation,
   type ProbePlan,
@@ -563,9 +567,58 @@ async function saveEdit() {
   }
 }
 
+// ---------- 聚合列表拖拽排序（CH-028） ----------
+const aggListRef = ref<HTMLElement | null>(null)
+let aggSortable: Sortable | null = null
+
+function initAggSortable() {
+  if (!aggListRef.value) return
+  aggSortable?.destroy()
+  aggSortable = Sortable.create(aggListRef.value, {
+    handle: '.drag-handle',
+    animation: 150,
+    ghostClass: 'drag-ghost',
+    fallbackTolerance: 3,
+    onEnd: async (evt) => {
+      if ((evt.oldIndex ?? -1) === (evt.newIndex ?? -1)) return
+      const domOrder = Array.from(aggListRef.value!.querySelectorAll('.group-card'))
+        .map((n) => (n as HTMLElement).dataset.aggName || '')
+        .filter(Boolean)
+      const byName = new Map(aggregations.value.map((g) => [g.name, g]))
+      const next = domOrder.map((n) => byName.get(n)).filter(Boolean) as Aggregation[]
+      if (next.length !== aggregations.value.length) {
+        // DOM 与数据长度不一致（异常情况）：直接回读后端顺序复原
+        await loadAll()
+        return
+      }
+      // 先同步本地数据，避免 Vue 用旧数组回写 DOM
+      aggregations.value = next
+      try {
+        await reorderAggregations(next.map((g) => g.name))
+        ElMessage.success('聚合顺序已保存')
+      } catch (e: any) {
+        ElMessage.error(e?.response?.data?.detail || '排序失败')
+        await loadAll()
+      }
+    },
+  })
+}
+
+watch(
+  () => aggregations.value.length,
+  () => nextTick(initAggSortable),
+)
+
 onMounted(async () => {
   await Promise.all([loadUpstreams(), loadRules()])
   await loadAll()
+  await nextTick()
+  initAggSortable()
+})
+
+onBeforeUnmount(() => {
+  aggSortable?.destroy()
+  aggSortable = null
 })
 </script>
 

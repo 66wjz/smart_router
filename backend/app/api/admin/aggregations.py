@@ -122,11 +122,27 @@ def _validate_bindings(cfg, raw: list[dict] | None) -> list[dict] | None:
     return cleaned
 
 
+class AggregationOrderRequest(BaseModel):
+    """聚合列表人工顺序（CH-028）"""
+    names: list[str] = []
+
+
 @router.get("/aggregations")
 async def list_aggregations(request: Request, _=Depends(check_auth)):
     """统一聚合列表（static + rule），含生效探测参数与模板名"""
     svc: ConfigService = request.app.state.config_service
     return {"aggregations": svc.list_aggregations()}
+
+
+@router.put("/aggregations/order")
+async def save_aggregation_order(req: AggregationOrderRequest, request: Request, _=Depends(check_auth)):
+    """保存聚合列表的人工拖拽顺序（存 sys_setting，不改表结构）
+
+    只保留当前真实存在的聚合名；未列出的聚合（新增/自动发现）读取时排末尾。
+    """
+    svc: ConfigService = request.app.state.config_service
+    count = svc.save_aggregation_order(req.names)
+    return {"ok": True, "count": count}
 
 
 @router.put("/aggregations")

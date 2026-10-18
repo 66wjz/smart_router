@@ -131,6 +131,11 @@ export function deleteAggregation(name: string) {
   return request.delete('/admin/api/aggregations', { params: { name } })
 }
 
+/** 保存聚合列表的人工拖拽顺序（CH-028） */
+export function reorderAggregations(names: string[]) {
+  return request.put('/admin/api/aggregations/order', { names })
+}
+
 /** rule 聚合的探测对象：所有路由规则候选的并集；传 name 则只算该聚合的绑定 */
 export function listRuleUnits(name?: string) {
   return request.get('/admin/api/aggregations/rule-units', { params: name ? { name } : {} })

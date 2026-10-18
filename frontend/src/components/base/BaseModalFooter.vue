@@ -1,6 +1,8 @@
 <template>
   <div class="modal-footer-actions">
-    <slot name="left"></slot>
+    <div v-if="$slots.left" class="modal-footer-left">
+      <slot name="left"></slot>
+    </div>
     <BaseButton variant="ghost" :disabled="loading" @click="$emit('cancel')">
       {{ cancelText }}
     </BaseButton>
@@ -47,5 +49,11 @@ defineEmits<{
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  /* 占满 footer 宽度，左侧附加操作才能靠到弹窗左边（CH-028） */
+  width: 100%;
+}
+/* 左侧附加操作（如「重新加载」）靠左，右侧仍保持取消+确定 */
+.modal-footer-left {
+  margin-right: auto;
 }
 </style>

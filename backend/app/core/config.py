@@ -226,6 +226,18 @@ class AppConfig(
         """获取可配置分组列表（[{name, description}]）"""
         return copy.deepcopy(self._settings.get("groups", self.DEFAULT_GROUPS))
 
+    @property
+    def aggregation_order(self) -> list[str]:
+        """聚合列表的人工排序（CH-028）；空列表表示沿用 kind+name 默认顺序"""
+        raw = self._settings.get("aggregation_order") or []
+        return [str(n) for n in raw if isinstance(n, str) and n]
+
+    def set_aggregation_order(self, names: list[str]) -> None:
+        """整体保存聚合列表顺序（存 sys_setting，不动 agg_unified 表结构）"""
+        cleaned = [str(n) for n in (names or []) if str(n).strip()]
+        self.set_setting("aggregation_order", cleaned)
+
+
     def set_groups(self, groups: list[dict]) -> None:
         """整体保存分组列表并热重载"""
         cleaned = []

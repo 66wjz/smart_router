@@ -588,7 +588,26 @@ Header: `Authorization: Bearer <token>`
 - **出参**: `{ "ok": true, "name": "..." }`
 - **错误码**: 404 聚合不存在
 
-#### 4.28.4 rule 聚合的探测对象
+#### 4.28.3.1 保存聚合列表顺序（CH-028）
+
+- **路径**: `PUT /admin/api/aggregations/order`
+- **鉴权**: JWT
+- **入参**:
+
+```json
+{ "names": ["deepseek-v4-1-flash", "smart-chat", "glm-4.6"] }
+```
+
+- **出参**: `{ "ok": true, "count": 3 }`
+- **语义**:
+  - 顺序存 `sys_setting.aggregation_order`（JSON 数组），**不改 `agg_unified` 表结构**
+  - 数组中不存在的聚合名会被过滤（防止删除后残留脏数据）
+  - 未列入数组的聚合（新增 / 自动发现）在列表末尾按 `kind + name` 排序
+  - 传空数组 = 恢复默认顺序（`kind + name`）
+  - 自动发现的聚合（`configured=false`，不在 `agg_unified` 中）也可参与排序
+- **错误码**: 401 未鉴权
+
+#### 4.28.4 rule 聚合的探测对象（CH-024）
 
 - **路径**: `GET /admin/api/aggregations/rule-units?name={聚合名}`（`name` 可选，CH-024）
 - **鉴权**: JWT

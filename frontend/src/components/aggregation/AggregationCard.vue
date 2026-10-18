@@ -1,7 +1,8 @@
 <template>
-  <div class="group-card">
+  <div class="group-card" :data-agg-name="g.name">
     <div class="group-head">
       <div class="group-title">
+        <span class="drag-handle" title="拖动调整聚合顺序">⠿</span>
         <code class="group-model">{{ g.name }}</code>
         <BaseBadge :variant="g.kind === 'rule' ? 'purple' : 'blue'">
           {{ g.kind === 'rule' ? '规则匹配' : '固定成员' }}
@@ -123,6 +124,26 @@ const probeBadge = computed<{ text: string; variant: BadgeVariant }>(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+/* 拖拽手柄：仅此区域可拖动，避免与开关/按钮点击冲突（CH-028） */
+.drag-handle {
+  cursor: grab;
+  color: var(--text-tertiary);
+  font-size: 1rem;
+  line-height: 1;
+  user-select: none;
+  padding: 0 2px;
+}
+.drag-handle:hover {
+  color: var(--accent-blue);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.drag-ghost {
+  opacity: 0.35;
+  background: var(--accent-blue-muted, rgba(64, 158, 255, 0.12)) !important;
+  border: 1px dashed var(--accent-blue) !important;
 }
 .group-title {
   display: flex;

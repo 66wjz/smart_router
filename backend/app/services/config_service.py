@@ -404,6 +404,12 @@ class ConfigService:
                 "remark": "",
                 "member_count": len(members),
             })
+
+        # CH-028：按人工排序重排（空数组 = 保持上面的默认顺序）
+        order = self.config.aggregation_order
+        if order:
+            rank = {name: i for i, name in enumerate(order)}
+            result.sort(key=lambda it: rank.get(it["name"], len(rank)))
         return result
 
     @staticmethod
@@ -432,6 +438,16 @@ class ConfigService:
     def delete_aggregation(self, name: str) -> None:
         if not self.config.delete_aggregation(name):
             raise HTTPException(404, f"聚合 {name} 不存在")
+
+    def save_aggregation_order(self, names: list[str]) -> int:
+        """保存聚合列表人工顺序（CH-028）；只保留当前真实存在的聚合名"""
+        existing = set(self.config.get_aggregations())
+        # 自动发现的聚合不在 agg_unified 里，但也要能排，故并入
+        existing |= set(self.config.collect_group_members())
+        cleaned = [n for n in (names or []) if n in existing]
+        self.config.set_aggregation_order(cleaned)
+        return len(cleaned)
+
 
     # ---------- 探测模板（CH-023） ----------
 

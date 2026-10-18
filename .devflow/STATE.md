@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-18（CH-027）
+- 上次更新：2026-10-18（CH-028）
 
 ## 补建说明
 
@@ -44,6 +44,7 @@
 | CH-025 | 请求可观测性与入站健壮性：请求上下文日志（轮转文件 `logs/smart-router.log` 10MB×5 + `GET /admin/api/logs` 网页读取 + `sk-` 脱敏）+ 三入站请求体校验（畸形请求 400，消灭裸 500）+ 全局异常兜底（按协议返回规范错误体）+ `estimate_tokens` 等对 null 的防御 + 新建聚合保存按钮卡死修复 + 复制 Key 去确认框（B 线-中 / A+B 混合） | ✅ 已实现+本地验证（2026-10-18），已归档；**已 push，未部署，待用户授权上线** | 本地（代码已推送仓库） |
 | CH-026 | 代码治理与组件化（B 线-大，纯重构行为零变更）：超长文件拆分（`Aggregated.vue` 1347→520、`Upstreams.vue` 1056→215、`Dashboard.vue` 688→395、`config.py` 1019→208 门面+4 mixin、`anthropic_adapter` 791→352、`responses_adapter` 695→311）+ 基础组件补齐落地（BaseConfirm/BaseModalFooter/BaseHint/BaseNotice/BasePagination）+ 硬编码色值令牌化（`--chart-*`，修正 `--accent-yellow`→`--accent-amber`） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 | CH-027 | 界面一致性治理 + 流式响应头超时（B 线-小 + A 线）：四页新增按钮统一右上角（`BaseSection #actions`）+ 区块保存按钮统一左下角 + 按钮尺寸统一 `size="sm"`（热重载漏写 size 为根因）+ 弹窗底部统一 `BaseModalFooter` + 侧边栏导航项固定高度 36px 去抖动 + 三适配器 `try_stream` 补 `response_timeout`（等响应头阶段，与非流式对齐） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
+| CH-028 | 后台交互补齐 + 聚合拖拽排序（A 线 + B 线-中）：分组管理「+ 添加分组」移右上角并改 primary 配色 + 全局容错三段表单 `label-width` 统一 160px（保存按钮对齐）+ 规则/别名候选模型改读库接口 `listSourceModels`（不再依赖上游可达）+ YAML 编辑改独立卡片 + 弹窗修改 + 聚合列表拖拽排序（`sys_setting.aggregation_order` + `PUT /admin/api/aggregations/order`） | ✅ 已实现+本地验证（2026-10-18），已归档；**未 push、未部署，待用户授权上线** | 本地 |
 
 ## 历史经验参考
 

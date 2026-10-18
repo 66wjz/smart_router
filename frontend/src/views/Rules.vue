@@ -1,8 +1,9 @@
 <template>
-  <BaseSection variant="card" title="路由规则管理">
-    <template #actions>
-      <BaseButton variant="primary" size="sm" @click="openAddRule">+ 新增规则</BaseButton>
-    </template>
+  <div>
+    <BaseSection variant="card" title="路由规则管理">
+      <template #actions>
+        <BaseButton variant="primary" size="sm" @click="openAddRule">+ 新增规则</BaseButton>
+      </template>
 
     <!-- 规则卡片列表 -->
     <div v-loading="loading">
@@ -114,21 +115,31 @@
           @cancel="ruleModalVisible = false" @confirm="handleSaveRule" />
       </template>
     </BaseModal>
+    </BaseSection>
 
-    <!-- YAML 编辑（高级） -->
-    <el-collapse style="margin-top: 16px">
-      <el-collapse-item title="YAML 编辑（高级）" name="yaml">
-        <BaseNotice title="直接编辑 JSON 格式的路由规则。修改后将整体保存并热重载。" />
-        <BaseInput v-model="rulesYaml" type="textarea" :rows="14" placeholder="rules: [...]" />
-        <div style="margin-top: 12px; display: flex; gap: 8px">
-          <BaseButton variant="primary" size="sm" :disabled="saving" @click="handleSaveYaml">
-            {{ saving ? '保存中...' : '保存 YAML 规则' }}
-          </BaseButton>
-          <BaseButton variant="ghost" size="sm" @click="initYaml">重新加载</BaseButton>
-        </div>
-      </el-collapse-item>
-    </el-collapse>
-  </BaseSection>
+    <!-- YAML 源码展示（CH-028：独立卡片，弹窗内修改） -->
+    <BaseSection variant="card" title="YAML 编辑（高级）" style="margin-top: 16px">
+      <template #actions>
+        <BaseButton variant="primary" size="sm" @click="openYamlModal">修改</BaseButton>
+      </template>
+      <BaseHint block style="margin-bottom: 12px"
+        text="直接编辑路由规则的 JSON 源码。修改后将整体保存并热重载。" />
+      <pre class="yaml-view">{{ rulesYaml }}</pre>
+    </BaseSection>
+
+    <!-- YAML 修改弹窗 -->
+    <BaseModal v-model:visible="yamlModalVisible" title="编辑规则源码（JSON）" size="large" height="70vh">
+      <BaseInput v-model="yamlEditText" type="textarea" :rows="22" placeholder="rules: [...]" />
+      <template #footer>
+        <BaseModalFooter :loading="saving" confirm-text="保存规则" @cancel="yamlModalVisible = false"
+          @confirm="handleSaveYaml">
+          <template #left>
+            <BaseButton variant="ghost" size="sm" @click="resetYamlEdit">重新加载</BaseButton>
+          </template>
+        </BaseModalFooter>
+      </template>
+    </BaseModal>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -141,11 +152,11 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
-import BaseNotice from '@/components/base/BaseNotice.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
 import { getRules, saveRules } from '@/api/rules'
 import { listUpstreams } from '@/api/upstreams'
-import { fetchUpstreamModels } from '@/api/aggregated'
+import { listSourceModels } from '@/api/model_groups'
 import { reloadConfig } from '@/api/common'
 
 const rules = ref<any[]>([])
@@ -154,6 +165,8 @@ const saving = ref(false)
 const upstreamIds = ref<string[]>([])
 const modelsByUpstream = reactive<Record<string, string[]>>({})
 const rulesYaml = ref('')
+const yamlModalVisible = ref(false)
+const yamlEditText = ref('')
 
 const ruleModalVisible = ref(false)
 const ruleEditIndex = ref<number | null>(null)
@@ -214,10 +227,10 @@ async function load() {
     rules.value = (rulesRes as any).rules
     upstreamIds.value = (upsRes as any).upstreams.map((u: any) => u.id)
     initYaml()
-    // 自动拉取各上游源模型列表
+    // 候选模型来自该源「已配置模型」（读库），不依赖上游是否可达（CH-028）
     upstreamIds.value.forEach((id) => {
-      fetchUpstreamModels(id)
-        .then((r: any) => (modelsByUpstream[id] = r.models || []))
+      listSourceModels(id)
+        .then((r: any) => (modelsByUpstream[id] = ((r.models || []) as any[]).map((m) => m.name)))
         .catch(() => {})
     })
   } finally {
@@ -330,19 +343,33 @@ async function handleDeleteRule(i: number) {
   }
 }
 
+function openYamlModal() {
+  yamlEditText.value = rulesYaml.value
+  yamlModalVisible.value = true
+}
+
+/** 重新加载：丢弃弹窗内未保存的编辑，恢复为当前已保存源码 */
+function resetYamlEdit() {
+  yamlEditText.value = JSON.stringify(rules.value, null, 2)
+}
+
 async function handleSaveYaml() {
   saving.value = true
   try {
-    const parsed = JSON.parse(rulesYaml.value)
+    const parsed = JSON.parse(yamlEditText.value)
     if (!Array.isArray(parsed)) {
       ElMessage.error('规则必须是列表格式')
       return
     }
     rules.value = parsed
     await saveAll()
+    yamlModalVisible.value = false
     ElMessage.success('规则已保存')
   } catch (e: any) {
-    ElMessage.error(`解析错误: ${e.message}`)
+    // JSON.parse 抛错时只提示解析失败；保存接口错误由拦截器提示
+    if (e instanceof SyntaxError) {
+      ElMessage.error(`解析错误: ${e.message}`)
+    }
   } finally {
     saving.value = false
   }
@@ -387,5 +414,21 @@ onMounted(load)
   gap: 6px;
   padding: 4px 0;
   flex-wrap: wrap;
+}
+/* YAML 源码只读展示（CH-028） */
+.yaml-view {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

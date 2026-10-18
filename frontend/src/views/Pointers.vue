@@ -100,7 +100,7 @@ import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
 import { addPointer, deletePointer, listPointers, updatePointer } from '@/api/pointers'
 import { listUpstreams } from '@/api/upstreams'
-import { fetchUpstreamModels } from '@/api/aggregated'
+import { listSourceModels } from '@/api/model_groups'
 import { reloadConfig } from '@/api/common'
 
 const pointers = ref<any[]>([])
@@ -124,8 +124,9 @@ async function load() {
     upstreamIds.value = (upsRes as any).upstreams.map((u: any) => u.id)
     if (upstreamIds.value.length && !addForm.upstream) addForm.upstream = upstreamIds.value[0]
     upstreamIds.value.forEach((id) => {
-      fetchUpstreamModels(id)
-        .then((r: any) => (modelsByUpstream[id] = r.models || []))
+      // 读该源「已配置模型」，不依赖上游是否可达（CH-028）
+      listSourceModels(id)
+        .then((r: any) => (modelsByUpstream[id] = ((r.models || []) as any[]).map((m) => m.name)))
         .catch(() => {})
     })
   } finally {
