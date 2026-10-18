@@ -1,8 +1,8 @@
 <template>
   <BaseSection variant="card" title="上游源列表">
-    <div class="toolbar">
+    <template #actions>
       <BaseButton variant="primary" size="sm" @click="openAdd">+ 添加上游源</BaseButton>
-    </div>
+    </template>
 
     <div v-loading="loading">
       <BaseEmptyState v-if="!upstreams.length && !loading" description="暂无上游源，请点击上方按钮添加" />
@@ -230,5 +230,3 @@ async function handleDelete(u: any) {
 
 onMounted(load)
 </script>
-
-<style scoped src="@/styles/upstreams.css"></style>

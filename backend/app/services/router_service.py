@@ -313,23 +313,30 @@ class RouterService:
 
             fmt = self.config.get_model_protocol(upstream_id, model)
 
+            # 流式：首包超时与响应头超时分开传（CH-027）；
+            # 非流式：沿用 response_timeout 作为连接/响应超时
+            stream_kwargs = {"response_timeout": response_timeout} if is_stream else {}
+
             if fmt == "anthropic":
                 result = await (try_stream_anthropic if is_stream else try_non_stream_anthropic)(
                     model, upstream_id, body, {},
                     first_chunk_timeout if is_stream else response_timeout,
                     self.http_client, self.config, self.health, model_max_output,
+                    **stream_kwargs,
                 )
             elif fmt == "responses":
                 result = await (try_stream_responses if is_stream else try_non_stream_responses)(
                     model, upstream_id, body, {},
                     first_chunk_timeout if is_stream else response_timeout,
                     self.http_client, self.config, self.health, model_max_output,
+                    **stream_kwargs,
                 )
             else:
                 result = await (try_stream if is_stream else try_non_stream)(
                     model, upstream_id, body, {},
                     first_chunk_timeout if is_stream else response_timeout,
                     self.http_client, self.config, self.health, model_max_output,
+                    **stream_kwargs,
                 )
 
             if result is not None:

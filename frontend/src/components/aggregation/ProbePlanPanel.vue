@@ -96,7 +96,7 @@
         </template>
 
         <el-form-item>
-          <BaseButton variant="primary" :disabled="saving" @click="$emit('save')">
+          <BaseButton variant="primary" size="sm" :disabled="saving" @click="$emit('save')">
             {{ saving ? '保存中...' : '保存全局探测设置' }}
           </BaseButton>
         </el-form-item>

@@ -183,7 +183,7 @@ function toggleGroup(label?: string) {
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: 8px 6px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -192,6 +192,7 @@ function toggleGroup(label?: string) {
   height: var(--control-height-sm);
   box-sizing: border-box;
   font-size: 13px;
+  line-height: 20px;
   transition: all 0.15s;
 }
 
@@ -202,11 +203,12 @@ function toggleGroup(label?: string) {
 
 .collapse-label {
   color: var(--text-tertiary);
+  line-height: 20px;
 }
 
 .collapsed .collapse-btn {
   justify-content: center;
-  padding: 8px 0;
+  padding: 0;
 }
 
 /* Navigation */
@@ -223,6 +225,9 @@ function toggleGroup(label?: string) {
 .nav-group-label {
   padding: 8px 12px 4px;
   font-size: 11px;
+  line-height: 16px;
+  height: 28px;
+  box-sizing: border-box;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-tertiary);
@@ -231,15 +236,19 @@ function toggleGroup(label?: string) {
   overflow: hidden;
 }
 
+/* 展开/收起高度必须一致，否则切换时整条导航会上下抖动（CH-027） */
 .nav-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 0 12px;
+  height: 36px;
+  box-sizing: border-box;
   margin: 0 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 13px;
+  line-height: 20px;
   color: var(--text-secondary);
   transition: all 0.15s;
   white-space: nowrap;
@@ -271,6 +280,7 @@ function toggleGroup(label?: string) {
 .nav-item-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 20px;
 }
 
 .nav-group-toggle .nav-item-label {
@@ -286,9 +296,10 @@ function toggleGroup(label?: string) {
   padding-left: 28px;
 }
 
+/* 收起态：隐藏文字后仍保持与展开态相同的高度 */
 .collapsed .nav-item {
   justify-content: center;
-  padding: 10px 0;
+  padding: 0;
   margin: 0 6px;
 }
 

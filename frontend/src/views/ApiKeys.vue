@@ -4,9 +4,9 @@
     title="路由层 API Key 管理"
     description="这些 Key 是客户端访问 Smart Router 的入场券。校验通过后，路由器会用各 upstream 自己的 Key 去访问模型提供商。"
   >
-    <div class="toolbar">
+    <template #actions>
       <BaseButton variant="primary" size="sm" @click="openAdd">+ 新增 Key</BaseButton>
-    </div>
+    </template>
 
     <!-- Key 列表 -->
     <el-table :data="keys" stripe v-loading="loading">
@@ -69,10 +69,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <BaseButton variant="ghost" @click="addVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="adding" @click="handleAdd">
-          {{ adding ? '添加中...' : '确定添加' }}
-        </BaseButton>
+        <BaseModalFooter :loading="adding" confirm-text="确定添加" loading-text="添加中..."
+          @cancel="addVisible = false" @confirm="handleAdd" />
       </template>
     </BaseModal>
 
@@ -95,10 +93,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <BaseButton variant="ghost" @click="editVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="editing" @click="handleEditSave">
-          {{ editing ? '保存中...' : '保存修改' }}
-        </BaseButton>
+        <BaseModalFooter :loading="editing" confirm-text="保存修改"
+          @cancel="editVisible = false" @confirm="handleEditSave" />
       </template>
     </BaseModal>
 
@@ -159,6 +155,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
@@ -339,9 +336,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.toolbar {
-  margin-bottom: 12px;
-}
 .row-actions {
   display: flex;
   align-items: center;

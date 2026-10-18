@@ -4,9 +4,9 @@
     title="模型别名管理"
     description="模型别名是指针：客户端请求别名时，直接转发到指定的真实模型，不走路由规则。可在后台随时切换指向。"
   >
-    <div class="toolbar">
+    <template #actions>
       <BaseButton variant="primary" size="sm" @click="openAdd">+ 新增别名</BaseButton>
-    </div>
+    </template>
 
     <!-- 现有别名 -->
     <el-table :data="pointers" stripe v-loading="loading">
@@ -52,10 +52,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <BaseButton variant="ghost" @click="addVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="adding" @click="handleAdd">
-          {{ adding ? '添加中...' : '确定添加' }}
-        </BaseButton>
+        <BaseModalFooter :loading="adding" confirm-text="确定添加" loading-text="添加中..."
+          @cancel="addVisible = false" @confirm="handleAdd" />
       </template>
     </BaseModal>
 
@@ -83,10 +81,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <BaseButton variant="ghost" @click="editVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="editing" @click="handleEditSave">
-          {{ editing ? '保存中...' : '保存修改' }}
-        </BaseButton>
+        <BaseModalFooter :loading="editing" confirm-text="保存修改"
+          @cancel="editVisible = false" @confirm="handleEditSave" />
       </template>
     </BaseModal>
   </BaseSection>
@@ -99,6 +95,7 @@ import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
 import { addPointer, deletePointer, listPointers, updatePointer } from '@/api/pointers'
@@ -204,7 +201,4 @@ onMounted(load)
 </script>
 
 <style scoped>
-.toolbar {
-  margin-bottom: 12px;
-}
 </style>

@@ -7,7 +7,7 @@
           <el-radio-button value="7d">近 7 天</el-radio-button>
           <el-radio-button value="30d">近 30 天</el-radio-button>
         </el-radio-group>
-        <BaseButton variant="ghost" size="sm" style="margin-left: 8px" @click="load">刷新</BaseButton>
+        <BaseButton variant="ghost" size="sm" @click="load">刷新</BaseButton>
       </template>
 
       <!-- 汇总卡片 -->

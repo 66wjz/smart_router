@@ -193,9 +193,14 @@ async def try_stream(
     app_config: AppConfig,
     health: ModelHealth,
     max_output: int | None = None,
+    *,
+    response_timeout: float | None = None,
 ) -> StreamingResponse | None:
     """尝试流式请求，首包成功返回 StreamingResponse，失败/超时返回 None
-    Key 池循环：401/403/429/首包超时/空响应/连接异常视为该 Key 失败，换下一个 Key 重试"""
+    Key 池循环：401/403/429/首包超时/空响应/连接异常视为该 Key 失败，换下一个 Key 重试
+
+    response_timeout: 等待上游返回「响应头」的超时（秒）。None = 不限（保持旧行为）。
+    与 first_chunk_timeout 分属两个阶段：先等响应头，拿到后才等首包内容。"""
     upstream = app_config.get_upstream(upstream_id)
     base_url = upstream.get("base_url", "").rstrip("/")
     keys = app_config.get_upstream_keys(upstream_id)
@@ -222,10 +227,19 @@ async def try_stream(
         await rl.before_attempt(api_key)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            resp = await http_client.send(
+            send_coro = http_client.send(
                 http_client.build_request("POST", url, json=modified, headers=headers),
                 stream=True,
             )
+            # 等响应头：有配置就走 wait_for，未配置保持旧行为（受 httpx 全局超时管）
+            resp = (await asyncio.wait_for(send_coro, timeout=response_timeout)
+                    if response_timeout else await send_coro)
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            app_config.key_pool.record_fail(upstream_id, api_key)
+            rl.on_failure(api_key)
+            rl.log_retry(f"流式响应头超时 ({response_timeout}s)")
+            log.warning(f"Key 池 [{upstream_id}] Key 流式响应头超时 ({response_timeout}s)，换下一个 Key")
+            continue
         except Exception as e:
             app_config.key_pool.record_fail(upstream_id, api_key)
             rl.on_failure(api_key)

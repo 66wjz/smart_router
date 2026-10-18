@@ -1,8 +1,8 @@
 <template>
   <BaseSection variant="card" title="路由规则管理">
-    <div class="toolbar">
+    <template #actions>
       <BaseButton variant="primary" size="sm" @click="openAddRule">+ 新增规则</BaseButton>
-    </div>
+    </template>
 
     <!-- 规则卡片列表 -->
     <div v-loading="loading">
@@ -110,10 +110,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <BaseButton variant="ghost" @click="ruleModalVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" :disabled="saving" @click="handleSaveRule">
-          {{ saving ? '保存中...' : '保存规则' }}
-        </BaseButton>
+        <BaseModalFooter :loading="saving" confirm-text="保存规则"
+          @cancel="ruleModalVisible = false" @confirm="handleSaveRule" />
       </template>
     </BaseModal>
 
@@ -123,10 +121,10 @@
         <BaseNotice title="直接编辑 JSON 格式的路由规则。修改后将整体保存并热重载。" />
         <BaseInput v-model="rulesYaml" type="textarea" :rows="14" placeholder="rules: [...]" />
         <div style="margin-top: 12px; display: flex; gap: 8px">
-          <BaseButton variant="primary" :disabled="saving" @click="handleSaveYaml">
+          <BaseButton variant="primary" size="sm" :disabled="saving" @click="handleSaveYaml">
             {{ saving ? '保存中...' : '保存 YAML 规则' }}
           </BaseButton>
-          <BaseButton variant="ghost" @click="initYaml">重新加载</BaseButton>
+          <BaseButton variant="ghost" size="sm" @click="initYaml">重新加载</BaseButton>
         </div>
       </el-collapse-item>
     </el-collapse>
@@ -141,6 +139,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
@@ -353,9 +352,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.toolbar {
-  margin-bottom: 12px;
-}
 .rule-card {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;

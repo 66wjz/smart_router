@@ -149,8 +149,12 @@ async def try_stream_responses(
     app_config: AppConfig,
     health: ModelHealth,
     max_output: int | None = None,
+    *,
+    response_timeout: float | None = None,
 ) -> StreamingResponse | None:
-    """尝试流式请求到 Responses 格式上游，SSE 事件转 openai 格式（首字节分界线不变）"""
+    """尝试流式请求到 Responses 格式上游，SSE 事件转 openai 格式（首字节分界线不变）
+
+    response_timeout: 等待上游返回「响应头」的超时（秒）。None = 不限（保持旧行为）。"""
     upstream = app_config.get_upstream(upstream_id)
     base_url = upstream.get("base_url", "").rstrip("/")
     keys = app_config.get_upstream_keys(upstream_id)
@@ -179,10 +183,19 @@ async def try_stream_responses(
         await rl.before_attempt(api_key)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            resp = await http_client.send(
+            send_coro = http_client.send(
                 http_client.build_request("POST", url, json=responses_body, headers=headers),
                 stream=True,
             )
+            # 等响应头：有配置就走 wait_for，未配置保持旧行为（受 httpx 全局超时管）
+            resp = (await asyncio.wait_for(send_coro, timeout=response_timeout)
+                    if response_timeout else await send_coro)
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            app_config.key_pool.record_fail(upstream_id, api_key)
+            rl.on_failure(api_key)
+            rl.log_retry(f"流式响应头超时 ({response_timeout}s)")
+            log.warning(f"Key 池 [{upstream_id}] Key 流式响应头超时 ({response_timeout}s)，换下一个 Key")
+            continue
         except Exception as e:
             app_config.key_pool.record_fail(upstream_id, api_key)
             rl.on_failure(api_key)

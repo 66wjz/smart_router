@@ -59,10 +59,8 @@
         <BaseInput v-model="pwdForm.confirm" type="password" placeholder="再次输入新密码" />
       </BaseFormGroup>
       <template #footer>
-        <BaseButton variant="ghost" size="sm" @click="pwdVisible = false">取消</BaseButton>
-        <BaseButton variant="primary" size="sm" :disabled="pwdLoading" @click="handleChangePwd">
-          {{ pwdLoading ? '提交中...' : '确定' }}
-        </BaseButton>
+        <BaseModalFooter :loading="pwdLoading" confirm-text="确定" loading-text="提交中..."
+          @cancel="pwdVisible = false" @confirm="handleChangePwd" />
       </template>
     </BaseModal>
   </div>
@@ -76,6 +74,7 @@ import BaseSidebar from '@/components/layout/BaseSidebar.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon from '@/components/base/BaseIcon.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import BaseFormGroup from '@/components/base/BaseFormGroup.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { confirmAction } from '@/components/base/BaseConfirm'

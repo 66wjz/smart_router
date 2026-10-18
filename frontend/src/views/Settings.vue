@@ -118,7 +118,7 @@
     <BaseSection variant="card" title="配置操作" style="margin-top: 16px">
       <BaseHint block style="margin-bottom: 12px"
         text="延迟探测节奏与探测时段已移至「智能路由 → 聚合模型 → 探测计划」。若通过其他途径直接改了数据库，可点此手动重新加载全部配置（不影响正在处理的请求）。" />
-      <BaseButton variant="primary" :disabled="reloading" @click="handleReload">
+      <BaseButton variant="primary" size="sm" :disabled="reloading" @click="handleReload">
         {{ reloading ? '热重载中...' : '热重载配置' }}
       </BaseButton>
     </BaseSection>
