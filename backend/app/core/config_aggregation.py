@@ -29,6 +29,8 @@ class AggregationConfigMixin:
             "kind": "static",
             "members": upstreams,
             "rule_bindings": None,
+            # CH-034：保留已有可用分组，避免改成员时把分组冲掉
+            "groups": existing.get("groups") or [],
             "enabled": enabled,
             "probe_enabled": existing.get("probe_enabled", False),
             "template_id": existing.get("template_id"),
@@ -71,6 +73,8 @@ class AggregationConfigMixin:
         for filename in (
             "07_增量_20261017_聚合统一与探测模板.sql",
             "08_增量_20261017_聚合规则绑定.sql",
+            "09_增量_20261018_聚合分组.sql",
+            "10_增量_20261018_自动聚合开关默认关闭.sql",
         ):
             path = os.path.join(base, "sql", "increment", filename)
             with open(path, encoding="utf-8") as f:
@@ -91,6 +95,43 @@ class AggregationConfigMixin:
     def get_aggregations(self) -> dict[str, dict]:
         with self._lock:
             return copy.deepcopy(self._aggregations)
+
+    def is_static_aggregation(self, name: str) -> bool:
+        """是否为「显式配置」的 static 聚合（CH-034）
+
+        只有人工配置过的聚合（agg_unified 行，或旧视图 _model_groups）才享受
+        「聚合门面」权限：只看聚合自身 groups，成员分组不参与。
+
+        自动发现的同名聚合（collect_group_members 推导，表里没有行）**不**算门面——
+        它只是「同名模型分布在多个源」，若也按空分组放行，等于把成员级的
+        分组保护隐式放宽（no_single_use 的模型会被 free Key 用到），属于权限漏洞。
+        用户想让它成为门面，在聚合页保存一次即可落库。
+        """
+        entity = self._aggregations.get(name)
+        if entity is not None:
+            return (entity.get("kind") or "static") == "static"
+        return name in self._model_groups
+
+    def get_aggregation_groups(self, name: str) -> set[str]:
+        """聚合可用分组集合（CH-034）
+
+        空集合 = 未配置 / 聚合不存在 → 语义为「所有 Key 可用」
+        """
+        entity = self._aggregations.get(name) or {}
+        groups = entity.get("groups")
+        if groups is None:
+            legacy = self._model_groups.get(name) or {}
+            groups = legacy.get("groups")
+        if not isinstance(groups, list):
+            return set()
+        return {str(g) for g in groups if g}
+
+    def is_aggregation_visible(self, name: str, key_groups: set[str] | None) -> bool:
+        """该 Key 是否可用此聚合（聚合级权限，CH-034）"""
+        if key_groups is None:
+            return True
+        agg_groups = self.get_aggregation_groups(name)
+        return not agg_groups or not agg_groups.isdisjoint(key_groups)
 
     def get_probe_templates(self) -> list[dict]:
         with self._lock:
@@ -118,6 +159,7 @@ class AggregationConfigMixin:
             "kind": "static",
             "members": [],
             "rule_bindings": None,
+            "groups": [],
             "enabled": False,
             "probe_enabled": False,
             "template_id": None,

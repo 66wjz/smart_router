@@ -158,11 +158,14 @@
       :catalog="ruleCatalog"
       :upstreams="upstreams"
       :source-models="sourceModels"
+      :groups="editGroups"
+      :group-options="groupOptions"
       :saving="savingEdit"
       @update:name="editName = $event"
       @update:kind="editKind = $event"
       @update:items="editItems = $event"
       @update:catalog="ruleCatalog = $event"
+      @update:groups="editGroups = $event"
       @ensure-models="ensureSourceModels"
       @remove-item="removeItem"
       @save="saveEdit"
@@ -208,6 +211,7 @@ import {
 } from '@/api/aggregations'
 import { listGroupSuggestions, listSourceModels, saveModelGroup } from '@/api/model_groups'
 import { getRules } from '@/api/rules'
+import { listGroups } from '@/api/groups'
 import { listUpstreams } from '@/api/upstreams'
 import { getProbeConfig, saveProbeConfig } from '@/api/settings'
 import { reloadConfig } from '@/api/common'
@@ -266,6 +270,9 @@ const editVisible = ref(false)
 const editMode = ref<'create' | 'edit'>('edit')
 const editName = ref('')
 const editItems = ref<MemberItem[]>([])
+/** CH-034：聚合可用分组（空 = 所有 Key 可用） */
+const editGroups = ref<string[]>([])
+const groupOptions = ref<{ name: string; description?: string }[]>([])
 
 const templateEditor = useTemplateEditor(templateForm, templateProbeForm, {
   emptyProbeForm,
@@ -288,7 +295,19 @@ async function loadAll() {
   const [aggs, sugg]: any = await Promise.all([listAggregations(), listGroupSuggestions()])
   aggregations.value = aggs.aggregations || []
   suggestions.value = sugg.suggestions || []
-  await Promise.all([loadTemplates(), loadPlan()])
+  await Promise.all([loadTemplates(), loadPlan(), loadGroups()])
+}
+
+/** CH-034：聚合可用分组下拉数据 */
+async function loadGroups() {
+  try {
+    const res: any = await listGroups()
+    groupOptions.value = (res.groups || []).map((g: any) => ({
+      name: g.name, description: g.description || '',
+    }))
+  } catch {
+    groupOptions.value = []
+  }
 }
 
 async function loadTemplates() {
@@ -497,6 +516,7 @@ function openEdit(g: Aggregation) {
   editMode.value = 'edit'
   editName.value = g.name
   editKind.value = 'static'
+  editGroups.value = [...(g.groups || [])]
   editItems.value = (g.members || []).map((m: any) => ({
     upstream: m.upstream,
     model: m.model || g.name,
@@ -510,6 +530,7 @@ function openCreate() {
   editMode.value = 'create'
   editName.value = ''
   editKind.value = 'static'
+  editGroups.value = []
   editItems.value = []
   ruleCatalog.value = buildCatalog(rules.value)
   ensureSourceModels(upstreams.value[0]?.id || '')
@@ -526,6 +547,7 @@ async function openEditRuleGroup(g: Aggregation) {
   editMode.value = 'edit'
   editName.value = g.name
   editKind.value = 'rule'
+  editGroups.value = [...(g.groups || [])]
   ruleCatalog.value = buildCatalog(rules.value, g)
   editVisible.value = true
 }
@@ -545,7 +567,7 @@ async function saveEdit() {
 
   savingEdit.value = true
   try {
-    const payload: Record<string, unknown> = { kind: editKind.value, enabled: true }
+    const payload: Record<string, unknown> = { kind: editKind.value, enabled: true, groups: editGroups.value }
     if (editKind.value === 'rule') {
       // rule 聚合不传 members（后端会拒绝）；规则绑定为空数组即"全跟随"
       payload.rule_bindings = collectBindings(ruleCatalog.value) || []

@@ -5,6 +5,36 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-18 - 部署 CH-034 + CH-036 到生产 10.10.0.2（用户授权）
+- 用户原话「部署，不然压根用不了」→ 视为明确授权，立即执行
+- 工具复用：`test/deploy_v520_full.py` 整树同步；改动两处 —— `MIGRATE_FILES` 追加 `increment/09` + `increment/10`；新增**第 9 步业务冒烟**（远端自动登录 → 校验开关/聚合列表//v1/models）
+- 9 步全过：备份（1.3M db + 644K 代码，`backup/20261018-233737`）→ 传 sql 13 个 → 预迁移 6 脚本全 APPLIED → 传后端 75 py → 换 dist 48 → 清缓存 chown → `COMPILE_OK` → 重启 active + 端点全 200 → 冒烟
+- **关键安全点确认**：启动日志 `配置已加载: 11 上游源, 3 规则, 5 密钥, 1 别名, 12 聚合` —— 配置未被清空，证明「重启前预迁移」规避掉了导入期降级（否则全量 401）
+- 冒烟初报 `SMOKE_FAIL`：3 个 rule 聚合不在 /v1/models。**先诊断再下结论**（写 `test/verify_prod_ch034_036.py` 只读查库）→ 确认生产上这 3 个聚合 `enabled=0`（用户早前关闭），`aggregated_names` 只收启用的 rule 名 → 断言写错，非缺陷；已修正部署脚本的断言语义
+- **决定性验收**（写 `test/verify_prod_facade_ch034.py`）：自动筛查「成员只存在于无权源」的聚合 → 用 Key(`free,premium`) 实测：直连 `buddy/deepseek-v4-flash` → **403**（`无权访问分组 ['no_single_use']`），走聚合 `deepseek-v4-flash` → **200** 且命中 buddy。CH-034 门面语义在生产确认生效
+- 顺带发现（如实登记、未擅自改动）：`dsh`(premium) 保留了与 `deepseek-v4-1-flash` 成员同名的 3 个模型 → 对有 premium 的 Key 而言该模型可经 dsh 直连，`no_single_use` 在此模型上数据层面失效；其余 8 个聚合锁定正常。是否清理 dsh 重复模型待用户决定
+- 文档同步：变更记录（部署 + 验证 + 数据侧现象）、STATE 标记生产、_changes 状态更新
+
+### 2026-10-18 - CH-036 同名模型自动聚合开关默认关闭（B 线-中 + A 线）
+- 用户质疑「自动发现聚合是不是很早做的东西、没必要、还导致 bug」→ 核实：CH-019（2026-10-16）引入，当时前提是「多家真不同供应商都提供同一模型」
+- 定位关键事实：`auto_same_name_enabled()` 在 CH-019 就写好了，但**全仓 0 调用点**，设置页无入口 → 开关形同虚设，自动聚合始终开启
+- 用户拓扑变化：`dsh` 与 10 个分源共用同一 `base_url` + 同一 `api_key`（同号池）→ 同名跨源聚合零收益
+- 方案 A（用户拍板）：保留代码路径 + 接上开关 + 默认关闭，而不是删除逻辑
+- 实现要点：`auto_same_name_enabled()` 默认值 `True→False`；`collect_group_members()` / `is_model_group()` 加开关判断；新增 `GET/PUT /admin/api/config/auto-aggregate`；SQL 10 用 `auto_same_name_migrated_v2` 标记保证「只迁移一次」
+- 同步收尾 CH-033：SQL 10 精确清理 `enabled=0` + 空成员 + 特定 remark 的空壳行（这些行会进 `_model_groups`，导致同名模型退化为单源直连、丢失跨源兜底）
+- 同步收尾 CH-034：保留 `is_static_aggregation()` 的「自动发现不算门面」防御判断（开关打开时仍必要）
+- 验证：`test/verify_auto_aggregate_ch036.py` 全通过（含「关闭后跨源兜底仍在：qwen3-coder-480b → ['buddy','trae']」这条关键断言）；CH-034 两套 + CH-023/024 三套回归全通过；`compileall` 0 错误；`npm run build` 通过
+- 文档同步 7 份 + STATE/日志；未部署
+
+### 2026-10-18 - CH-034 聚合模型独立分组（B 线-大）
+- 分类（铁律 7）：用户反馈「聚合一用就 403 `API Key 无权访问分组 ['no_single_use']`」→ 定位为**设计缺陷**（`agg_unified` 无 `groups` 字段，权限继承自成员），归 **B 线-大**，先写 `docs/_changes/CH-034-聚合模型独立分组.md` 再改代码
+- 用户明确补充：**rule 聚合与 static 聚合统一**按聚合自身分组
+- 决策：`groups` 空 = 所有 Key 可用（存量 `NULL` 行为不变）；成员分组不参与聚合权限；上游禁用/模型禁用仍按原逻辑
+- **实施中发现并修正一个设计边界**：初版把「自动发现聚合」也当门面（`collect_group_members()` 命中也放行），单测用例 4 立刻暴露出问题——同名模型横跨多源时会被隐式放宽为「任何 Key 可用」，绕过 `no_single_use` 保护。改回「只有显式配置（`agg_unified` / 旧 `_model_groups` 有行）的聚合才算门面」
+- 验证：新增 `test/verify_group_scope_ch034.py`（19 项）+ `test/verify_models_scope_ch034.py`（TestClient 真实链路）全通过；CH-023/024 三套回归全通过；`compileall` 0 错误；`npm run build` 通过
+- 文档同步 9 份：数据库设计 / 架构设计 / API契约 / 接口文档 / 系统核心流程 / 需求规格 9.2 / 功能清单 / 五列矩阵 / 变更记录；STATE 追加维护迭代记录
+- 未部署：等用户授权后再上生产 10.10.0.2
+
 ### 2026-10-18 - 生产全量部署上线 v5.2.0（CH-020~CH-032 累计 13 项）
 - 前置：用户授权部署（明确「原来怎么部署的就怎么部署」），并提供 SSH 凭据（root / 10.10.0.2:22）
 - **只读勘察先行**（未改任何东西）：`test/deploy_probe_prod.py` 摸清生产现状 → 发现三处与预期不符的关键事实：①生产 python 是 `/opt/smart-router/backend/.venv/bin/python`（不是历史脚本里的 `/root/miniconda3`）；②`systemd` 以 `User=wjz666123` 运行（不是 root，上传后必须 chown）；③生产库只有 10 张表，**缺 `agg_model_group`/`agg_unified`/`agg_probe_config`/`agg_probe_template`**

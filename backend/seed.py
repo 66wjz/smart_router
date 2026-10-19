@@ -31,6 +31,8 @@ SQL_FILES = (
     "increment/06_增量_20261017_聚合探测配置.sql",
     "increment/07_增量_20261017_聚合统一与探测模板.sql",
     "increment/08_增量_20261017_聚合规则绑定.sql",
+    "increment/09_增量_20261018_聚合分组.sql",
+    "increment/10_增量_20261018_自动聚合开关默认关闭.sql",
 )
 
 

@@ -8,6 +8,9 @@
           {{ g.kind === 'rule' ? '规则匹配' : '固定成员' }}
         </BaseBadge>
         <BaseBadge v-if="!g.configured" variant="gray">自动发现</BaseBadge>
+        <BaseBadge variant="purple">
+          {{ (g.groups && g.groups.length) ? `分组: ${g.groups.join('/')}` : '所有分组可用' }}
+        </BaseBadge>
         <BaseBadge v-if="g.template_name" variant="green">模板: {{ g.template_name }}</BaseBadge>
         <BaseBadge :variant="g.probe.sort_mode === 'latency' ? 'amber' : 'gray'">
           {{ g.probe.sort_mode === 'latency' ? '速度优先' : '稳定优先' }}

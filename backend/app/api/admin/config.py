@@ -1,8 +1,9 @@
 """
-admin 系统参数接口 - 延迟探测 / 重试 / 故障转移 / 热重载
+admin 系统参数接口 - 延迟探测 / 重试 / 故障转移 / 同名聚合 / 热重载
 """
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 
 from app.api.deps import check_auth
 from app.services.config_service import ConfigService
@@ -68,6 +69,30 @@ async def set_failover_config(request: Request, _=Depends(check_auth)):
     svc: ConfigService = request.app.state.config_service
     svc.set_failover_config(await request.json())
     return {"ok": True}
+
+
+# ---------- 同名模型自动聚合（CH-036） ----------
+
+class AutoAggregateRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("/config/auto-aggregate")
+async def get_auto_aggregate(request: Request, _=Depends(check_auth)):
+    """同名模型自动聚合开关（默认关闭）"""
+    svc: ConfigService = request.app.state.config_service
+    return {"enabled": svc.get_auto_aggregate()}
+
+
+@router.put("/config/auto-aggregate")
+async def set_auto_aggregate(req: AutoAggregateRequest, request: Request, _=Depends(check_auth)):
+    """打开/关闭同名模型自动聚合
+
+    仅影响「同名模型是否被当作聚合组」，不影响跨源兜底（多候选仍会生成）。
+    """
+    svc: ConfigService = request.app.state.config_service
+    svc.set_auto_aggregate(req.enabled)
+    return {"ok": True, "enabled": req.enabled}
 
 
 # ---------- 热重载 ----------

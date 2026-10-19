@@ -13,6 +13,14 @@
           <el-radio value="rule">规则匹配（复用路由规则，可裁剪）</el-radio>
         </el-radio-group>
       </el-form-item>
+      <el-form-item label="可用分组">
+        <el-select :model-value="groups" multiple clearable style="width: 100%"
+          placeholder="不选 = 所有 Key 都可用"
+          @update:model-value="(v: string[]) => $emit('update:groups', v)">
+          <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
+        </el-select>
+        <BaseHint text="聚合是独立门面：此处分组决定哪些 API Key 能用它，成员所属上游源的分组不再参与校验" />
+      </el-form-item>
     </el-form>
 
     <MemberEditor
@@ -39,6 +47,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseHint from '@/components/base/BaseHint.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import MemberEditor from './MemberEditor.vue'
@@ -54,6 +63,9 @@ const props = defineProps<{
   catalog: BindItem[]
   upstreams: { id: string; name?: string }[]
   sourceModels: Record<string, string[]>
+  /** CH-034：聚合可用分组（空 = 所有 Key 可用） */
+  groups: string[]
+  groupOptions: { name: string; description?: string }[]
   saving: boolean
 }>()
 
@@ -63,6 +75,7 @@ defineEmits<{
   'update:kind': [value: 'static' | 'rule']
   'update:items': [value: MemberItem[]]
   'update:catalog': [value: BindItem[]]
+  'update:groups': [value: string[]]
   'ensure-models': [upstream: string]
   'remove-item': [item: MemberItem]
   save: []

@@ -85,11 +85,26 @@ class AggregationRepository(BaseRepository):
                 raw = {}
         return raw if isinstance(raw, dict) else {}
 
+    @staticmethod
+    def _parse_groups(raw) -> list[str]:
+        """解析聚合可用分组（CH-034）
+
+        空 / NULL / 非法 → []（语义：所有 Key 可用，兼容存量）
+        """
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw else []
+            except Exception:
+                raw = []
+        if not isinstance(raw, list):
+            return []
+        return [str(g) for g in raw if g]
+
     def list_all(self) -> dict[str, dict]:
-        """{聚合名: {kind, members, rule_bindings, enabled, probe_enabled, ...}}；表不存在时返回空"""
+        """{聚合名: {kind, members, rule_bindings, groups, enabled, ...}}；表不存在时返回空"""
         try:
             rows = self.query(
-                f"SELECT name, kind, members, rule_bindings, enabled, probe_enabled, template_id, "
+                f"SELECT name, kind, members, rule_bindings, groups, enabled, probe_enabled, template_id, "
                 f"sort_mode, interval_seconds, slow_threshold_seconds, schedule, remark "
                 f"FROM {self.TABLE} ORDER BY kind, name"
             )
@@ -102,6 +117,7 @@ class AggregationRepository(BaseRepository):
                 "kind": r.get("kind") or "static",
                 "members": self._parse_members(r.get("members")),
                 "rule_bindings": self._parse_bindings(r.get("rule_bindings")),
+                "groups": self._parse_groups(r.get("groups")),
                 "enabled": bool(r.get("enabled", 1)),
                 "probe_enabled": bool(r.get("probe_enabled", 0)),
                 "template_id": r.get("template_id"),
@@ -118,15 +134,17 @@ class AggregationRepository(BaseRepository):
         kind = data.get("kind") or "static"
         members = self._parse_members(data.get("members"))
         bindings = self._parse_bindings(data.get("rule_bindings"))
+        groups = self._parse_groups(data.get("groups"))
         schedule = json.dumps(self._parse_schedule(data.get("schedule")), ensure_ascii=False)
         self.execute(
             f"INSERT INTO {self.TABLE} "
-            f"(name, kind, members, rule_bindings, enabled, probe_enabled, template_id, sort_mode, "
+            f"(name, kind, members, rule_bindings, groups, enabled, probe_enabled, template_id, sort_mode, "
             f" interval_seconds, slow_threshold_seconds, schedule, remark) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             f"ON CONFLICT(name) DO UPDATE SET "
             f"kind = excluded.kind, members = excluded.members, "
-            f"rule_bindings = excluded.rule_bindings, enabled = excluded.enabled, "
+            f"rule_bindings = excluded.rule_bindings, groups = excluded.groups, "
+            f"enabled = excluded.enabled, "
             f"probe_enabled = excluded.probe_enabled, template_id = excluded.template_id, "
             f"sort_mode = excluded.sort_mode, interval_seconds = excluded.interval_seconds, "
             f"slow_threshold_seconds = excluded.slow_threshold_seconds, "
@@ -137,6 +155,7 @@ class AggregationRepository(BaseRepository):
                 kind,
                 json.dumps(members, ensure_ascii=False),
                 json.dumps(bindings, ensure_ascii=False) if bindings else None,
+                json.dumps(groups, ensure_ascii=False) if groups else None,
                 1 if data.get("enabled", True) else 0,
                 1 if data.get("probe_enabled") else 0,
                 data.get("template_id"),

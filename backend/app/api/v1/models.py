@@ -54,6 +54,9 @@ async def list_models(request: Request):
     # 必须单独遍历 agg_unified，否则聚合名虽然在路由里可用，却不会出现在模型列表。
     existing_ids = {m["id"] for m in result["data"]}
     for agg_name in cfg.aggregated_names:
+        # CH-034：聚合按自身分组做可见性判断（空 = 所有 Key 可见）
+        if not cfg.is_aggregation_visible(agg_name, key_groups):
+            continue
         ctx_values, output_values = [], []
         for rule in cfg.rules:
             for c in rule.get("candidates", []):
@@ -71,6 +74,7 @@ async def list_models(request: Request):
             "aggregation_kind": "rule",
             "context_length": min(ctx_values) if ctx_values else None,
             "max_output": max(output_values) if output_values else None,
+            "groups": sorted(cfg.get_aggregation_groups(agg_name)),
         }
         result["data"].insert(0, entry)
         existing_ids.add(agg_name)
@@ -81,6 +85,9 @@ async def list_models(request: Request):
             continue
         if name in existing_ids:
             continue  # 与真实模型或 rule 聚合重名时不重复输出
+        # CH-034：聚合按自身分组做可见性判断（空 = 所有 Key 可见）
+        if not cfg.is_aggregation_visible(name, key_groups):
+            continue
         members = entity.get("members") or []
         result["data"].insert(0, {
             "id": name,
@@ -90,6 +97,7 @@ async def list_models(request: Request):
             "type": "aggregation",
             "aggregation_kind": "static",
             "member_count": len(members),
+            "groups": list(entity.get("groups") or []),
         })
         existing_ids.add(name)
 

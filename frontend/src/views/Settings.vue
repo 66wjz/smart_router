@@ -85,6 +85,22 @@
       </el-form>
     </BaseSection>
 
+    <!-- 同名模型聚合 -->
+    <BaseSection variant="card" title="同名模型聚合" style="margin-top: 16px">
+      <BaseHint block style="margin-bottom: 12px"
+        text="多个上游源都存在同名模型时，是否自动把它当成一个聚合组。关闭后这类模型仍会跨源兜底（一个源失败自动换下一个），只是不再出现在聚合列表里、也不作为聚合参与权限判断。" />
+      <el-form label-width="160px">
+        <el-form-item label="自动聚合同名模型">
+          <el-switch :model-value="autoAggregate" :loading="savingAutoAggregate"
+            @update:model-value="(v: any) => handleSaveAutoAggregate(Boolean(v))" />
+          <BaseHint inline
+            :text="autoAggregate
+              ? '已开启：同名模型分布在 ≥2 个源时会自动成为聚合组'
+              : '已关闭（推荐）：同名模型只做跨源兜底，需聚合请在「聚合模型」页手动创建'" />
+        </el-form-item>
+      </el-form>
+    </BaseSection>
+
     <!-- 分组管理 -->
     <BaseSection variant="card" title="分组管理" style="margin-top: 16px">
       <template #actions>
@@ -138,9 +154,11 @@ import BaseNotice from '@/components/base/BaseNotice.vue'
 import { reloadConfig } from '@/api/common'
 import { listGroups, updateGroups } from '@/api/groups'
 import {
+  getAutoAggregateConfig,
   getFailoverConfig,
   getRetryConfig,
   getSmartRetryConfig,
+  saveAutoAggregateConfig,
   saveFailoverConfig,
   saveRetryConfig,
   saveSmartRetryConfig,
@@ -153,6 +171,10 @@ const saving = ref(false)
 const savingGroups = ref(false)
 const groupsForm = ref<{ name: string; description: string }[]>([])
 
+/** CH-036：同名模型自动聚合开关 */
+const autoAggregate = ref(false)
+const savingAutoAggregate = ref(false)
+
 const retryForm = reactive<any>({})
 const failoverForm = reactive<any>({})
 const smartRetryForm = reactive<any>({ extra_attempts: 2, backoff_ms: [500, 1500], jitter: 0.2 })
@@ -162,13 +184,15 @@ async function load() {
   loading.value = true
   loadFailed.value = false
   try {
-    const [groups, retry, failover, smartRetry]: any = await Promise.all([
+    const [groups, retry, failover, smartRetry, autoAgg]: any = await Promise.all([
       listGroups(),
       getRetryConfig(),
       getFailoverConfig(),
       getSmartRetryConfig(),
+      getAutoAggregateConfig().catch(() => ({ enabled: false })),
     ])
     groupsForm.value = (groups.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
+    autoAggregate.value = Boolean(autoAgg?.enabled)
     Object.assign(retryForm, retry)
     Object.assign(failoverForm, failover)
     Object.assign(smartRetryForm, smartRetry)
@@ -225,6 +249,20 @@ async function save(fn: any, form: any) {
     await reloadConfig()
   } finally {
     saving.value = false
+  }
+}
+
+async function handleSaveAutoAggregate(enabled: boolean) {
+  savingAutoAggregate.value = true
+  try {
+    await saveAutoAggregateConfig(enabled)
+    autoAggregate.value = enabled
+    ElMessage.success(enabled ? '已开启同名模型自动聚合' : '已关闭同名模型自动聚合')
+    await reloadConfig()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    savingAutoAggregate.value = false
   }
 }
 

@@ -42,6 +42,7 @@ class ProbePlanConfigMixin:
                 "kind": existing.get("kind") or "static",
                 "members": existing.get("members") or [],
                 "rule_bindings": existing.get("rule_bindings"),
+                "groups": existing.get("groups") or [],
                 "enabled": existing.get("enabled", True),
                 "probe_enabled": bool(data.get("enabled")),
                 "template_id": data.get("template_id", existing.get("template_id")),
@@ -64,6 +65,7 @@ class ProbePlanConfigMixin:
                 "kind": existing.get("kind") or "static",
                 "members": existing.get("members") or [],
                 "rule_bindings": existing.get("rule_bindings"),
+                "groups": existing.get("groups") or [],
                 "enabled": existing.get("enabled", True),
                 "probe_enabled": False,
                 "template_id": None,
@@ -198,6 +200,10 @@ class ProbePlanConfigMixin:
                     members.append({"upstream": uid, "model": actual})
                 result[name] = members
             else:
+                # CH-036：开关关闭时，「同名分布多源」不再自动构成聚合组；
+                # 跨源兜底走 collect_model_upstreams 的另一条路径，不受影响。
+                if not self.auto_same_name_enabled():
+                    continue
                 auto = discovered.get(name, [])
                 if len(auto) >= 2:
                     result[name] = [{"upstream": uid, "model": name} for uid in auto]
@@ -205,10 +211,13 @@ class ProbePlanConfigMixin:
 
     def is_model_group(self, name: str) -> bool:
         """是否为聚合组名（轻量判断，供请求路径使用）
-        人工配置且启用 → 是；否则同名模型分布在 >=2 个启用的上游源 → 是"""
+        人工配置且启用 → 是；否则（CH-036：仅当自动聚合同名开关打开时）
+        同名模型分布在 >=2 个启用的上游源 → 是"""
         conf = self._model_groups.get(name)
         if conf is not None:
             return bool(conf.get("enabled", True))
+        if not self.auto_same_name_enabled():
+            return False
         count = 0
         for u in self._upstreams:
             uid = u.get("upstream_id", "")

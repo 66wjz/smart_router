@@ -59,8 +59,12 @@ class UpstreamConfigMixin:
         return True
 
     def auto_same_name_enabled(self) -> bool:
-        """同名模型自动聚合开关（CH-019，sys_setting.auto_same_name_aggregate 默认开）"""
-        return bool(self._settings.get("auto_same_name_aggregate", True))
+        """同名模型自动聚合开关（CH-019；CH-036 默认改为关闭）
+
+        关闭时：「同名模型分布在多个源」不再被当成聚合组，但不影响跨源兜底
+        （collect_model_upstreams 仍返回多候选）。
+        """
+        return bool(self._settings.get("auto_same_name_aggregate", False))
 
     def get_upstream_keys(self, upstream_id: str) -> list[str]:
         """获取上游源的启用 Key 列表（Key 池）"""

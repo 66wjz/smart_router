@@ -141,18 +141,21 @@ Header: `Authorization: Bearer <token>`
 - **分组过滤**: 仅返回该 Key 有权访问分组的上游模型（无 Key 返回 401）
 - **出参**: OpenAI models 列表 + 聚合模型条目 + 别名条目
 - **CH-033**: 聚合条目覆盖 **rule 与 static 两类**；static 聚合（含异名聚合）此前被遗漏，导致「聚合名可调用但在模型列表看不到」。聚合条目标记 `type: "aggregation"`，并用 `aggregation_kind` 区分 `rule` / `static`；`enabled=false` 的聚合不输出；与真实模型或另一聚合重名时只输出一次
+- **CH-034**: 聚合条目**按聚合自身 `groups` 过滤**（空 = 所有 Key 可见），不再按成员所属上游源分组过滤；真实模型条目仍按上游源分组过滤。聚合条目额外输出 `groups` 字段
 
 ```json
 {
   "object": "list",
   "data": [
-    { "id": "deepseek-v4-1-flash", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "static", "member_count": 3 },
-    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "rule", "context_length": 128000, "max_output": 65536 },
+    { "id": "deepseek-v4-1-flash", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "static", "member_count": 3, "groups": ["premium"] },
+    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "rule", "context_length": 128000, "max_output": 65536, "groups": [] },
     { "id": "my-model", "object": "model", "owned_by": "smart-router", "type": "pointer", "target_model": "deepseek-ai/deepseek-v4-pro" },
     { "id": "mistralai/mistral-large-...", "object": "model" }
   ]
 }
 ```
+
+> **403 文案差异（CH-034）**：请求被拒时，聚合命中报 `API Key 无权访问聚合 xxx（该聚合分组 [...]）`；真实模型命中报 `API Key 无权访问分组 [...]（模型 xxx）`——可用于快速区分是聚合门面拒绝还是成员级拒绝。
 
 ---
 
@@ -533,6 +536,7 @@ Header: `Authorization: Bearer <token>`
 { "aggregations": [
   { "name": "deepseek-v4-1-flash", "kind": "static", "enabled": true, "configured": true,
     "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
+    "groups": ["premium"],
     "member_count": 3, "template_id": 1, "template_name": "高频-交易时段",
     "probe": { "enabled": true, "interval_seconds": 60, "slow_threshold_seconds": 5,
                "sort_mode": "latency", "schedule": {"mode":"window","..."},
@@ -554,6 +558,7 @@ Header: `Authorization: Bearer <token>`
   - `kind=static`：固定成员，`members` 为候选链路
   - `kind=rule`：候选由路由规则运行时匹配，`members` 恒空，`member_count` 为**按绑定裁剪后**的候选展开单元数
   - `configured=false`：未人工配置、由同名模型自动发现
+  - `groups`（CH-034）：聚合自身可用分组，空数组 = 所有 Key 可用。**static 与 rule 同一语义**，成员所属上游源的分组不参与聚合权限判断
   - `probe` 为**生效值**（模板优先 → 自配 → 全局）；`self_config` 为落库原值（编辑回显用）
   - `rule_bindings`（CH-024，仅 rule）：`null`/`[]` = 全跟随（所有规则、全部候选）；`[{"rule","candidates"}]` 中 `candidates=null` 表示该规则候选全跟随，数组表示显式候选子集
   - `rule_binding_summary`：卡片摘要（规则数 / 候选数 / 每条规则明细）
@@ -569,6 +574,7 @@ Header: `Authorization: Bearer <token>`
 { "kind": "static|rule", "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
   "rule_bindings": [{"rule":"默认对话","candidates":null},
                     {"rule":"视觉理解","candidates":[{"upstream":"buddy","model":"gemini-2.5-pro"}]}],
+  "groups": ["premium"],
   "enabled": true,
   "probe_enabled": true, "template_id": 1,
   "sort_mode": "stable|latency", "interval_seconds": 60, "slow_threshold_seconds": 5,
@@ -582,7 +588,8 @@ Header: `Authorization: Bearer <token>`
   - `rule_bindings`（CH-024，仅 `kind=rule`）：同样支持显式 `null`/`[]` 清空（= 全跟随）
   - `rule_bindings[].rule` 必须存在于当前规则表（否则 404）；`candidates` 里的 `{upstream, model}` 必须属于该规则的候选（否则 400）；规则候选列表为空时不允许绑定（400）
   - `template_id` 非空时必须存在
-- **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源或模板不存在
+  - `groups`（CH-034）：聚合可用分组数组；空数组 / 未提供 = 所有 Key 可用。传入的分组名必须存在于分组表（否则 404）。**static 与 rule 均适用**
+- **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源、模板或分组不存在
 
 #### 4.28.3 删除聚合
 
@@ -886,6 +893,18 @@ Header: `Authorization: Bearer <token>`
 - **鉴权**: JWT
 - **配置字段**: max_fails/cooldown_seconds
 
+### 4.19b 配置项 - 同名模型自动聚合（CH-036）
+
+- **路径**: `GET /admin/api/config/auto-aggregate`
+- **路径**: `PUT /admin/api/config/auto-aggregate`
+- **鉴权**: JWT
+- **出参**: `{ "enabled": false }`
+- **入参**: `{ "enabled": true }`
+- **语义**: 控制「多个上游源都有同名模型时，是否自动当成一个聚合组」。
+  - `false`（默认）：同名模型只做跨源兜底（`collect_model_upstreams()` 仍返回多候选），不出现在聚合列表、不作为聚合参与权限判断
+  - `true`：恢复 CH-019 旧行为，同名分布 ≥2 个启用源时自动成为聚合组
+- **存储**: `sys_setting.auto_same_name_aggregate`
+
 ### 4.20 修改管理员密码
 
 - **路径**: `PUT /admin/api/admin-password`
@@ -957,6 +976,7 @@ Header: `Authorization: Bearer <token>`
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
 | 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_unified（kind=static, members） |
 | 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups（兼容）；GET/PUT/DELETE /admin/api/aggregations；GET .../suggestions；GET .../source-models | agg_unified |
+| 聚合独立分组（门面权限） | PUT /admin/api/aggregations（`groups`）；GET /admin/api/aggregations（`groups`）；GET /v1/models 按聚合分组过滤 | agg_unified(groups), sys_setting(groups) |
 | 聚合探测与排序配置 | PUT /admin/api/aggregations（probe_* / sort_mode / schedule / template_id）；GET /admin/api/model-groups/probe-configs（兼容） | agg_unified |
 | 探测模板 | GET/POST /admin/api/probe-templates；PUT/DELETE /admin/api/probe-templates/{id} | agg_probe_template |
 | 探测计划与排班表 | GET /admin/api/probe-plan（兼容 .../model-groups/probe-plan）；GET /admin/api/aggregations/rule-units | agg_unified, agg_probe_template, sys_setting(latency_probe) |
@@ -968,6 +988,7 @@ Header: `Authorization: Bearer <token>`
 | 重试参数配置 | GET/PUT /admin/api/config/retry | sys_setting |
 | 智能重试全局参数 | GET/PUT /admin/api/config/smart-retry | sys_setting(smart_retry) |
 | 故障转移参数配置 | GET/PUT /admin/api/config/failover | sys_setting |
+| 同名模型自动聚合开关 | GET/PUT /admin/api/config/auto-aggregate | sys_setting(auto_same_name_aggregate) |
 | 配置热重载 | POST /admin/api/reload | 全表 |
 
 ## 六、变更记录

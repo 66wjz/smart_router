@@ -203,6 +203,7 @@ class SettingsConfigMixin:
                 "kind": "rule",
                 "members": [],
                 "rule_bindings": prev.get("rule_bindings"),
+                "groups": prev.get("groups") or [],
                 "enabled": True if prev.get("kind") == "rule" else prev.get("enabled", True),
                 "probe_enabled": prev.get("probe_enabled", False),
                 "template_id": prev.get("template_id"),

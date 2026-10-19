@@ -31,3 +31,12 @@ export function getFailoverConfig() {
 export function saveFailoverConfig(data: Record<string, unknown>) {
   return request.put('/admin/api/config/failover', data)
 }
+
+/** 同名模型自动聚合开关（CH-036，默认关闭） */
+export function getAutoAggregateConfig() {
+  return request.get('/admin/api/config/auto-aggregate')
+}
+
+export function saveAutoAggregateConfig(enabled: boolean) {
+  return request.put('/admin/api/config/auto-aggregate', { enabled })
+}

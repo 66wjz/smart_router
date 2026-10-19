@@ -337,6 +337,8 @@ class ConfigService:
                 "kind": kind,
                 "enabled": bool(entity.get("enabled", True)),
                 "members": entity.get("members") or [],
+                # CH-034：聚合自身可用分组；空 = 所有 Key 可用
+                "groups": entity.get("groups") or [],
                 "configured": True,
                 "template_id": entity.get("template_id"),
                 "template_name": templates.get(entity.get("template_id"), {}).get("name", ""),
@@ -387,6 +389,7 @@ class ConfigService:
                 "kind": "static",
                 "enabled": True,
                 "members": members,
+                "groups": [],
                 "configured": False,
                 "template_id": None,
                 "template_name": "",
@@ -509,6 +512,14 @@ class ConfigService:
 
     def set_groups(self, groups: list[dict]) -> None:
         self.config.set_groups(groups)
+
+    # ---------- 同名模型自动聚合（CH-036） ----------
+
+    def get_auto_aggregate(self) -> bool:
+        return self.config.auto_same_name_enabled()
+
+    def set_auto_aggregate(self, enabled: bool) -> None:
+        self.config.set_setting("auto_same_name_aggregate", bool(enabled))
 
     # ---------- 热重载 ----------
 

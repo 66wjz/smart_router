@@ -1,8 +1,11 @@
-"""v5.2.0 全量部署脚本：把本地 backend/ + sql/ + frontend/dist 同步到生产 10.10.0.2。
+"""全量同步部署脚本：把本地 backend/ + sql/ + frontend/dist 同步到生产 10.10.0.2。
+
+v5.2.0 首次使用（CH-020~CH-032 累计 13 项一次上线），此后作为**唯一部署工具**复用：
+每次把生产对齐到本地 HEAD。迁移脚本清单 MIGRATE_FILES 需随新增量同步追加。
 
 为什么不是增量传文件：
-    本地已到 CH-032，生产停在 CH-019 一期，中间 13 个变更含 CH-026 的文件拆分新增、
-    CH-023/CH-024 的表结构迁移。逐文件增量必然漏文件，改为整树同步。
+    CH-026 含文件拆分新增、CH-023/CH-024/CH-034/CH-036 含表结构与数据迁移。
+    逐文件增量必然漏文件，改为整树同步。
 
 两个绝对不能踩的坑（已实测确认）：
     1. **绝不执行 seed.py** —— drop_all() 会先删掉全部表再重建，生产数据全丢。
@@ -68,12 +71,15 @@ REMOTE_PY = f"{REMOTE_BACKEND}/.venv/bin/python"
 REMOTE_DB = f"{REMOTE_BACKEND}/smart_router.db"
 SERVICE_OWNER = "wjz666123"
 
-# 需要按序执行的迁移脚本（顺序不可调换：06 建 agg_model_group/agg_probe_config，07 才引用它们）
+# 需要按序执行的迁移脚本（顺序不可调换：06 建 agg_model_group/agg_probe_config，07 才引用它们；
+# 09 给 agg_unified 加 groups 列，10 依赖该列并做清理与开关翻转）
 MIGRATE_FILES = (
     "sql/06_用量统计与自动聚合.sql",
     "sql/increment/06_增量_20261017_聚合探测配置.sql",
     "sql/increment/07_增量_20261017_聚合统一与探测模板.sql",
     "sql/increment/08_增量_20261017_聚合规则绑定.sql",
+    "sql/increment/09_增量_20261018_聚合分组.sql",
+    "sql/increment/10_增量_20261018_自动聚合开关默认关闭.sql",
 )
 
 # 远端执行迁移的助手脚本：逐条执行、容忍 duplicate column、其余错误立即报错退出
@@ -101,6 +107,75 @@ print("APPLIED ok=%d skip=%d <- %s" % (ok, skip, path.rsplit("/", 1)[-1]))
 '''
 
 BACKEND_EXCLUDES = ()
+
+# 部署后冒烟：验证 CH-034（聚合分组）与 CH-036（自动聚合开关关闭）真的生效
+# 管理员账号密码从生产库读出（不硬编码、不打印），避免把凭据写进仓库
+SMOKE_SCRIPT = '''import json, sqlite3, urllib.request, urllib.error
+
+BASE = "http://127.0.0.1:10002"
+DB = "/opt/smart-router/backend/smart_router.db"
+
+
+def http(method, path, body=None, token=None):
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(BASE + path, data=data, method=method)
+    if data is not None:
+        r.add_header("Content-Type", "application/json")
+    if token:
+        r.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(r, timeout=20) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+    except Exception as e:
+        return 0, str(e)
+
+
+con = sqlite3.connect(DB)
+row = con.execute("SELECT value FROM sys_setting WHERE key='admin'").fetchone()
+cfg = json.loads(row[0]) if row else {}
+user = cfg.get("username", "admin")
+pwd = cfg.get("password", "")
+
+st, body = http("POST", "/admin/api/login", {"username": user, "password": pwd})
+token = json.loads(body).get("token", "") if st == 200 else ""
+print("login:", st, "token:", "yes" if token else "no")
+
+auto_off = False
+st, body = http("GET", "/admin/api/config/auto-aggregate", token=token)
+if st == 200:
+    auto_off = json.loads(body).get("enabled") is False
+print("auto-aggregate:", st, body.strip()[:60])
+
+aggs, auto_found, has_groups = [], [], False
+st, body = http("GET", "/admin/api/aggregations", token=token)
+if st == 200:
+    aggs = json.loads(body).get("aggregations", [])
+    auto_found = [a["name"] for a in aggs if not a.get("configured", True)]
+    has_groups = all("groups" in a for a in aggs)
+print("aggregations:", len(aggs), [a["name"] for a in aggs])
+print("auto-discovered leftovers:", auto_found)
+print("groups field on all:", has_groups)
+# 只有「启用的」聚合才该出现在 /v1/models（已被用户关闭的聚合本就不输出，属预期）
+expected = [a["name"] for a in aggs if a.get("enabled")]
+print("expected in /v1/models (启用中的聚合):", expected)
+
+keys = con.execute("SELECT key_value FROM api_api_key WHERE enabled=1").fetchall()
+key = next((k[0] for k in keys if k[0] and "CHANGE-ME" not in k[0]), "")
+st, body = http("GET", "/v1/models", token=key)
+ids, agg_ids = [], []
+if st == 200:
+    data = json.loads(body).get("data", [])
+    ids = [m["id"] for m in data]
+    agg_ids = [m["id"] for m in data if m.get("type") == "aggregation"]
+print("/v1/models:", st, "total:", len(ids), "aggregation entries:", agg_ids)
+missing = [n for n in expected if n not in ids]
+print("aggregations missing from /v1/models:", missing)
+
+ok = (st == 200 and auto_off and not auto_found and has_groups and not missing)
+print("SMOKE_OK" if ok else "SMOKE_FAIL")
+'''
 
 
 def _skip_backend(rel_posix: str) -> bool:
@@ -231,8 +306,15 @@ def main() -> int:
             "tabs = sorted(r[0] for r in con.execute(\"SELECT name FROM sqlite_master WHERE type='table'\"))\n"
             "print('TABLES:', ','.join(tabs))\n"
             "print('agg_unified rows:', con.execute('SELECT COUNT(*) FROM agg_unified').fetchone()[0])\n"
-            "print('rule_bindings col:', [r[1] for r in con.execute('PRAGMA table_info(agg_unified)')].count('rule_bindings'))\n"
+            "cols = [r[1] for r in con.execute('PRAGMA table_info(agg_unified)')]\n"
+            "print('agg_unified cols:', ','.join(cols))\n"
+            "print('rule_bindings col:', cols.count('rule_bindings'))\n"
+            "print('groups col:', cols.count('groups'))\n"
             "print('log_usage.upstream_model:', [r[1] for r in con.execute('PRAGMA table_info(log_usage)')].count('upstream_model'))\n"
+            "print('auto_same_name_aggregate:', con.execute(\"SELECT value FROM sys_setting WHERE key='auto_same_name_aggregate'\").fetchone())\n"
+            "print('CH-033 残留空壳行:', con.execute(\n"
+            "    \"SELECT COUNT(*) FROM agg_unified WHERE kind='static' AND enabled=0 \"\n"
+            "    \"AND remark='已关闭（原自动发现聚合）'\").fetchone()[0])\n"
             "PYEOF"
         )))
 
@@ -291,6 +373,15 @@ def main() -> int:
 
         print("\n===== 最近 25 行日志 =====")
         print(run(client, "journalctl -u smart-router -n 25 --no-pager"))
+
+        # ---------- 9 业务冒烟 ----------
+        step("9 业务冒烟（CH-034 聚合分组 / CH-036 自动聚合开关）")
+        sftp.putfo(io.BytesIO(SMOKE_SCRIPT.encode("utf-8")), "/tmp/sr_smoke_deploy.py")
+        smoke_out = run(client, f"{REMOTE_PY} /tmp/sr_smoke_deploy.py", timeout=120)
+        print(smoke_out)
+        if "SMOKE_OK" not in smoke_out:
+            print("\n!! 冒烟未全部通过 —— 服务已起来，但上述项需人工复核（见备份目录回滚说明）")
+            return 5
 
         print(f"\n部署完成。备份目录：{backup_dir}")
         print(f"回滚代码：cd {REMOTE_ROOT} && tar xzf {backup_dir}/backend_code.tar.gz && "

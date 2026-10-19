@@ -33,13 +33,16 @@ async def set_groups(req: GroupsRequest, request: Request, _=Depends(check_auth)
     svc: ConfigService = request.app.state.config_service
     cfg = request.app.state.config
 
-    # 收集当前被引用的分组（CH-016：上游源为多分组数组）
+    # 收集当前被引用的分组（CH-016：上游源为多分组数组；CH-034：聚合也可引用分组）
     used: set[str] = set()
     for u in cfg.upstreams:
         for g in u.get("groups") or [u.get("group_name", "free")]:
             used.add(g)
     for ak in cfg.api_keys:
         for g in cfg._parse_groups(ak.get("groups")):
+            used.add(g)
+    for agg in cfg.get_aggregations().values():
+        for g in agg.get("groups") or []:
             used.add(g)
 
     new_names = {g.name for g in req.groups}

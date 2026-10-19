@@ -230,11 +230,13 @@ class RouterService:
             # rule 聚合：候选来自路由规则匹配，仍按 priority + 动态权重排序
             # （探测结果通过 get_dynamic_weight 参与排序，CH-023 保持不变）
             # CH-024：传入聚合名，按该聚合的规则/候选绑定裁剪
+            # CH-034：权限只看聚合自身分组；成员分组不再参与 → allowed_groups 传 None
+            self._check_aggregation_group(model_name, key_groups)
             messages = body.get("messages", [])
             est_tokens = estimate_tokens(messages)
             candidates = get_ordered_candidates(
                 messages, body, self.config, self.probe, self.health, est_tokens,
-                allowed_groups=key_groups, aggregation=model_name,
+                allowed_groups=None, aggregation=model_name,
             )
             if self.config.log_routing:
                 c_str = ", ".join(c["model"].split("/")[-1] for c in candidates[:3])
@@ -243,27 +245,34 @@ class RouterService:
             return candidates, "aggregated"
 
         # 直接请求特定模型名（CH-019：同名/异名聚合为多候选，按配置或上游顺序降级）
+        # CH-034：static 聚合视为「门面」，只校验聚合自身分组，成员分组不参与
+        is_static_agg = self.config.is_static_aggregation(model_name)
+        if is_static_agg:
+            self._check_aggregation_group(model_name, key_groups)
+
         resolved = self.config.resolve_group_candidates(model_name)
         if not resolved:
             # 全部命中源被禁用/禁模型时，回退旧逻辑拿 upstream_id 用于报错信息
             upstream_id = self.config.find_model_upstream(model_name)
-            self._check_group(upstream_id, key_groups, model_name)
+            if not is_static_agg:
+                self._check_group(upstream_id, key_groups, model_name)
             candidates = []
         else:
             candidates = []
             for item in resolved:
                 uid = item["upstream"]
-                try:
-                    self._check_group(uid, key_groups, item["model"])
-                except HTTPException:
-                    continue  # 该源无分组权限，跳过
+                if not is_static_agg:
+                    try:
+                        self._check_group(uid, key_groups, item["model"])
+                    except HTTPException:
+                        continue  # 该源无分组权限，跳过
                 candidates.append({
                     "model": item["model"],
                     "upstream": uid,
                     "max_output": None,
                     "weight": item.get("weight", 1),
                 })
-            if not candidates:
+            if not candidates and not is_static_agg:
                 self._check_group(resolved[0]["upstream"], key_groups, resolved[0]["model"])  # 抛 403
             # CH-021/023：static 聚合按该聚合的排序策略（stable / latency）分层重排，
             # 全部不可用时回退配置顺序
@@ -274,6 +283,21 @@ class RouterService:
             detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in candidates)
             log.info(f"直接转发: {model_name} → 候选 {len(candidates)} 个 [{detail}]")
         return candidates, "direct"
+
+    def _check_aggregation_group(self, agg_name: str, key_groups: set[str] | None) -> None:
+        """聚合级权限校验（CH-034）
+
+        聚合是「对外门面」：只看聚合自身 groups，成员所属上游源的分组不参与。
+        groups 为空 = 未配置 = 所有 Key 可用（兼容存量）。
+        """
+        if key_groups is None:
+            return
+        agg_groups = self.config.get_aggregation_groups(agg_name)
+        if agg_groups and agg_groups.isdisjoint(key_groups):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API Key 无权访问聚合 {agg_name}（该聚合分组 {sorted(agg_groups)}）",
+            )
 
     def _check_group(self, upstream_id: str, key_groups: set[str] | None, model: str) -> None:
         """分组权限检查 + 禁用上游拦截"""

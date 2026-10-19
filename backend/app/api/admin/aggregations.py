@@ -32,6 +32,8 @@ class AggregationUpdate(BaseModel):
     members: list[AggregationMember] | None = None
     # 仅 kind=rule：规则绑定子集；null / [] = 全跟随（CH-024）
     rule_bindings: list[dict] | None = None
+    # CH-034：可用分组；空 = 所有 Key 可用
+    groups: list[str] | None = None
     enabled: bool | None = None
 
     # 探测（若挂了模板，以下自配字段不生效）
@@ -193,10 +195,21 @@ async def save_aggregation(name: str, req: AggregationUpdate, request: Request, 
             return getattr(req, field)
         return existing.get(field, default)
 
+    # CH-034：可用分组（空 = 所有 Key 可用）；分组名必须真实存在
+    if "groups" in provided:
+        groups = [str(g) for g in (req.groups or []) if g]
+        valid_groups = {g.get("name") for g in cfg.get_groups()}
+        unknown = [g for g in groups if g not in valid_groups]
+        if unknown:
+            raise HTTPException(404, f"分组不存在: {', '.join(unknown)}")
+    else:
+        groups = list(existing.get("groups") or [])
+
     payload = {
         "kind": kind,
         "members": members,
         "rule_bindings": rule_bindings,
+        "groups": groups,
         "enabled": req.enabled if req.enabled is not None else existing.get("enabled", True),
         "probe_enabled": req.probe_enabled if req.probe_enabled is not None
         else existing.get("probe_enabled", False),

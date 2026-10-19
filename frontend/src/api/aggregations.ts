@@ -54,6 +54,8 @@ export interface Aggregation {
   /** 未人工配置、由同名模型自动发现时为 false */
   configured: boolean
   members: AggregationMember[]
+  /** CH-034：聚合自身可用分组；空 = 所有 Key 可用 */
+  groups: string[]
   member_count: number
   template_id: number | null
   template_name: string
