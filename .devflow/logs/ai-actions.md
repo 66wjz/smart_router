@@ -5,6 +5,16 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-19 - CH-037 出站消息角色规范化（A 线）
+- **流程纠正**：本轮先定位后**直接改了代码**，用户指出「不能直接改，要先给结论/方案、跟 skill 流程走」。已 `git checkout` 回滚未批准的改动、删除 4 个临时诊断脚本，重新按流程执行
+- 分类（铁律 7）：客户端发合法请求、网关因上游兼容性全链路失败 → **A 线（bug）**
+- 定位链（先定位再改）：生产日志三成员全 400 + 失败请求 `body_snippet` 首条为 `role:"developer"` → 直连号池逐项对比，`developer` 单独触发 400 → 排除 `max_completion_tokens` / `parallel_tool_calls` / `tools=[]` / `reasoning_effort` / `stream_options` / 流式非流式（全 200）
+- 方案 A（用户批准）：出站适配器把 `developer` 规范化成 `system`（语义等价）
+- 实现：`_normalize_messages()` + 三处调用（`try_non_stream` / `try_stream` / `test_non_stream`，均在 deepcopy 副本上）；顺带补 400 响应体日志（此前只记状态码，导致排查被迫直连号池）
+- 验证：`test/verify_role_normalize_ch037.py` 全通过（单元 11 项 + 集成 3 组，用本地 mock 上游断言「上游收到的 role 是 system」）；CH-023/024/034/036 五套回归全通过；`compileall` 0 错误
+- **未部署**：用户明确要求，避免重启中断当前会话
+- 文档同步：变更记录 / 架构设计 / 接口文档 / 系统核心流程 / 功能清单 / 五列矩阵 / _changes 索引 / STATE
+
 ### 2026-10-18 - 部署 CH-034 + CH-036 到生产 10.10.0.2（用户授权）
 - 用户原话「部署，不然压根用不了」→ 视为明确授权，立即执行
 - 工具复用：`test/deploy_v520_full.py` 整树同步；改动两处 —— `MIGRATE_FILES` 追加 `increment/09` + `increment/10`；新增**第 9 步业务冒烟**（远端自动登录 → 校验开关/聚合列表//v1/models）

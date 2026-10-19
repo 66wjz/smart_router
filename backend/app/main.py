@@ -54,7 +54,7 @@ HTTP_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), veri
 # ============================================================
 # FastAPI 应用
 # ============================================================
-app = FastAPI(title="Smart Router", version="5.2.0")
+app = FastAPI(title="Smart Router", version="5.2.1")
 
 # 挂载路由
 app.include_router(v1_router)
@@ -182,7 +182,7 @@ async def startup():
     # CH-032：预热 JWT 密钥（环境变量 > sys_setting > 自动生成并落库）
     # 放在配置加载之后，确保 sys_setting 已就绪
     get_jwt_secret()
-    log.info(f"Smart Router v5.2.0 启动，监听端口 {config.listen_port}")
+    log.info(f"Smart Router v5.2.1 启动，监听端口 {config.listen_port}")
 
 
 @app.on_event("shutdown")

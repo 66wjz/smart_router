@@ -20,6 +20,26 @@ log = logging.getLogger("router")
 SMART_RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 
+def _normalize_messages(body: dict) -> None:
+    """出站前规范化消息角色（CH-037）
+
+    OpenAI 后期把 `system` 更名为 `developer`，二者语义等价。但部分上游/中转
+    （本环境号池实测）只认 `system`，遇到 `developer` 直接返回
+    400 unsupported message role: developer。
+
+    客户端（如 DSH）把 developer 放在首条消息里，导致该请求在任何候选上都必然
+    失败；多源同名聚合时表现为「所有模型均不可用」503，且无法通过重试恢复。
+
+    这里就地改写为 system：只改 role，不动 content 与消息顺序。
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "developer":
+            msg["role"] = "system"
+
+
 def _build_endpoint(base_url: str, path: str) -> str:
     """拼接请求端点，容错 base_url 误填完整 URL（已含目标路径时直接使用）"""
     base = (base_url or "").rstrip("/")
@@ -107,6 +127,7 @@ async def try_non_stream(
 
     modified = copy.deepcopy(body)
     modified["model"] = model
+    _normalize_messages(modified)
     if max_output and "max_tokens" in modified and modified["max_tokens"] > max_output:
         log.info(f"  max_tokens 调整: {modified['max_tokens']} → {max_output} (模型上限)")
         modified["max_tokens"] = max_output
@@ -178,7 +199,9 @@ async def try_non_stream(
             rl.log_retry(f"HTTP {resp.status_code}")
             continue
         health.record_fail(upstream_id, model)
-        log.warning(f"模型 {model.split('/')[-1]} 返回错误: HTTP {resp.status_code}")
+        # CH-037：带上上游响应体摘要，否则只知道 400 不知道为什么（排查时被迫直连号池）
+        detail = _extract_error_detail(raw, resp.status_code)
+        log.warning(f"模型 {model.split('/')[-1]} 返回错误: HTTP {resp.status_code} {detail}")
         return None
     return None
 
@@ -210,6 +233,7 @@ async def try_stream(
 
     modified = copy.deepcopy(body)
     modified["model"] = model
+    _normalize_messages(modified)
     if max_output and "max_tokens" in modified and modified["max_tokens"] > max_output:
         log.info(f"  max_tokens 调整: {modified['max_tokens']} → {max_output} (模型上限)")
         modified["max_tokens"] = max_output
@@ -248,7 +272,7 @@ async def try_stream(
             continue
 
         if resp.status_code != 200:
-            await resp.aread()
+            err_raw = await resp.aread()
             await resp.aclose()
             if resp.status_code in (401, 403, 429):
                 app_config.key_pool.record_fail(upstream_id, api_key)
@@ -261,7 +285,9 @@ async def try_stream(
                 rl.log_retry(f"流式 HTTP {resp.status_code}（首字节前）")
                 continue
             health.record_fail(upstream_id, model)
-            log.warning(f"模型 {model.split('/')[-1]} 流式返回错误: HTTP {resp.status_code}")
+            # CH-037：带上上游响应体摘要，否则只知道 400 不知道为什么
+            detail = _extract_error_detail(err_raw, resp.status_code)
+            log.warning(f"模型 {model.split('/')[-1]} 流式返回错误: HTTP {resp.status_code} {detail}")
             return None
 
         line_iter = resp.aiter_lines()
@@ -345,6 +371,7 @@ async def test_non_stream(
 
     modified = copy.deepcopy(body)
     modified["model"] = model
+    _normalize_messages(modified)
 
     last_error = "上游所有 Key 均失败"
     for _ in range(len(keys)):
