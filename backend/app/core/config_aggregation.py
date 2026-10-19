@@ -75,6 +75,7 @@ class AggregationConfigMixin:
             "08_增量_20261017_聚合规则绑定.sql",
             "09_增量_20261018_聚合分组.sql",
             "10_增量_20261018_自动聚合开关默认关闭.sql",
+            "11_增量_20261019_请求详情可观测性.sql",
         ):
             path = os.path.join(base, "sql", "increment", filename)
             with open(path, encoding="utf-8") as f:

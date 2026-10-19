@@ -7,67 +7,140 @@ from app.repositories.base import BaseRepository
 
 class UsageRepository(BaseRepository):
     TABLE = "log_usage"
+    DETAIL_TABLE = "log_usage_detail"
 
     def insert_many(self, rows: list[dict]) -> int:
         """批量插入用量记录，返回插入条数
-        CH-021：upstream_model 列可能尚未迁移（旧库），此时退回旧列写法，避免整批丢弃"""
+
+        CH-021：upstream_model 列可能尚未迁移（旧库），此时退回旧列写法，避免整批丢弃
+        CH-038：新增 cache_read_tokens / cache_write_tokens / attempt_count 三列；
+                请求详情写入 log_usage_detail（与主表同一事务，靠 lastrowid 关联）
+        """
         if not rows:
             return 0
-        has_unit_col = self._ensure_unit_column()
-        if has_unit_col:
-            sql = (
-                f"INSERT INTO {self.TABLE} "
-                f"(ts, api_key_id, api_key_name, upstream_id, upstream_name, model, upstream_model, "
-                f" protocol, stream, status, http_status, prompt_tokens, completion_tokens, total_tokens, "
-                f" estimated, duration_ms, first_token_ms, error_msg) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-        else:
-            sql = (
-                f"INSERT INTO {self.TABLE} "
-                f"(ts, api_key_id, api_key_name, upstream_id, upstream_name, model, protocol, stream, "
-                f" status, http_status, prompt_tokens, completion_tokens, total_tokens, estimated, "
-                f" duration_ms, first_token_ms, error_msg) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-        params = []
-        for r in rows:
-            base = (
-                r.get("ts"), r.get("api_key_id"), r.get("api_key_name"),
-                r.get("upstream_id"), r.get("upstream_name"), r.get("model"),
-            )
-            if has_unit_col:
-                base += (r.get("upstream_model"),)
-            base += (
-                r.get("protocol", "chat"), 1 if r.get("stream") else 0,
-                r.get("status", "success"), r.get("http_status", 200),
-                r.get("prompt_tokens", 0), r.get("completion_tokens", 0), r.get("total_tokens", 0),
-                1 if r.get("estimated") else 0,
-                r.get("duration_ms"), r.get("first_token_ms"),
-                (r.get("error_msg") or "")[:500],
-            )
-            params.append(base)
-        return self._lock_cursor_batch(sql, params)
+        cols = self._columns()
+        extra_cols = [c for c in ("upstream_model", "cache_read_tokens",
+                                  "cache_write_tokens", "attempt_count") if c in cols]
+        names = (
+            ["ts", "api_key_id", "api_key_name", "upstream_id", "upstream_name", "model"]
+            + extra_cols
+            + ["protocol", "stream", "status", "http_status", "prompt_tokens",
+               "completion_tokens", "total_tokens", "estimated", "duration_ms",
+               "first_token_ms", "error_msg"]
+        )
+        sql = (
+            f"INSERT INTO {self.TABLE} ({', '.join(names)}) "
+            f"VALUES ({', '.join('?' * len(names))})"
+        )
+        has_detail = self.DETAIL_TABLE in self._tables()
 
-    _unit_col_state: bool | None = None
+        from app.core.database import get_conn
+        from app.repositories.base import _lock
+
+        inserted = 0
+        with _lock:
+            conn = get_conn()
+            for r in rows:
+                params = [
+                    r.get("ts"), r.get("api_key_id"), r.get("api_key_name"),
+                    r.get("upstream_id"), r.get("upstream_name"), r.get("model"),
+                ]
+                for c in extra_cols:
+                    if c == "upstream_model":
+                        params.append(r.get("upstream_model"))
+                    else:
+                        params.append(int(r.get(c) or 0))
+                params += [
+                    r.get("protocol", "chat"), 1 if r.get("stream") else 0,
+                    r.get("status", "success"), r.get("http_status", 200),
+                    r.get("prompt_tokens", 0), r.get("completion_tokens", 0),
+                    r.get("total_tokens", 0), 1 if r.get("estimated") else 0,
+                    r.get("duration_ms"), r.get("first_token_ms"),
+                    (r.get("error_msg") or "")[:500],
+                ]
+                cur = conn.execute(sql, tuple(params))
+                inserted += 1
+                detail = r.get("detail")
+                if detail and has_detail:
+                    self._insert_detail(conn, cur.lastrowid, detail)
+            conn.commit()
+        return inserted
+
+    @staticmethod
+    def _insert_detail(conn, log_id: int, detail: dict) -> None:
+        """写详情行（与主表同事务，失败不影响主表已插入的行）"""
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO log_usage_detail "
+                "(log_id, request_headers, request_body, forward_body, response_body, attempts) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    log_id,
+                    detail.get("request_headers"),
+                    detail.get("request_body"),
+                    detail.get("forward_body"),
+                    detail.get("response_body"),
+                    detail.get("attempts"),
+                ),
+            )
+        except Exception:
+            pass
+
+    _cols_state: dict = {}
+
+    def _columns(self) -> set[str]:
+        """主表列名（带缓存，避免每条批量插入都 PRAGMA）"""
+        key = f"{self.TABLE}:{id(self)}"
+        cached = UsageRepository._cols_state.get(key)
+        if cached is not None:
+            return cached
+        try:
+            names = {c.get("name") for c in self.query(f"PRAGMA table_info({self.TABLE})")}
+        except Exception:
+            names = set()
+        UsageRepository._cols_state[key] = names
+        return names
+
+    _tables_state: set | None = None
+
+    def _tables(self) -> set[str]:
+        if UsageRepository._tables_state is not None:
+            return UsageRepository._tables_state
+        try:
+            rows = self.query("SELECT name FROM sqlite_master WHERE type='table'")
+            UsageRepository._tables_state = {r["name"] for r in rows}
+        except Exception:
+            UsageRepository._tables_state = set()
+        return UsageRepository._tables_state
 
     def _ensure_unit_column(self) -> bool:
-        """检查（并按需创建）upstream_model 列；结果缓存在类上"""
-        if UsageRepository._unit_col_state is not None:
-            return UsageRepository._unit_col_state
+        """幂等补齐 log_usage 的增量列（CH-021 upstream_model + CH-038 三列）
+
+        老库缺列时运行期补上，避免整批写入失败；补齐后清空列缓存。
+        """
+        wanted = {
+            "upstream_model": "TEXT",
+            "cache_read_tokens": "INTEGER DEFAULT 0",
+            "cache_write_tokens": "INTEGER DEFAULT 0",
+            "attempt_count": "INTEGER DEFAULT 1",
+        }
         try:
-            cols = self.query(f"PRAGMA table_info({self.TABLE})")
-            names = {c.get("name") for c in cols}
+            names = {c.get("name") for c in self.query(f"PRAGMA table_info({self.TABLE})")}
+            changed = False
+            for col, ddl in wanted.items():
+                if col not in names:
+                    self.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN {col} {ddl}")
+                    changed = True
             if "upstream_model" not in names:
-                self.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN upstream_model TEXT")
                 self.execute(
                     f"CREATE INDEX IF NOT EXISTS idx_usage_unit "
                     f"ON {self.TABLE}(upstream_id, upstream_model, ts)"
                 )
-            UsageRepository._unit_col_state = True
+            if changed:
+                UsageRepository._cols_state.clear()
+            return "upstream_model" in names or changed
         except Exception:
-            UsageRepository._unit_col_state = False
-        return bool(UsageRepository._unit_col_state)
+            return False
 
     def _lock_cursor_batch(self, sql: str, params: list[tuple]) -> int:
         from app.core.database import get_conn
@@ -79,10 +152,44 @@ class UsageRepository(BaseRepository):
             return cur.rowcount
 
     def purge_older_than(self, days: int) -> int:
-        """删除保留期之前的记录"""
+        """删除保留期之前的记录（主表 + 详情表同步，CH-038）
+
+        先删详情再删主表：当前虽无外键，但保持顺序可让「详情行数 ≤ 主表行数」
+        始终成立，避免中途失败留下孤儿详情。
+        """
         cutoff = __import__("time").time() - days * 86400
+        detail_deleted = 0
+        if self.DETAIL_TABLE in self._tables():
+            from app.core.database import get_conn
+            from app.repositories.base import _lock
+            with _lock:
+                conn = get_conn()
+                cur = conn.execute(
+                    f"DELETE FROM {self.DETAIL_TABLE} WHERE log_id IN "
+                    f"(SELECT id FROM {self.TABLE} WHERE ts < ?)",
+                    (cutoff,),
+                )
+                detail_deleted = cur.rowcount or 0
+                conn.commit()
         cur = self.execute(f"DELETE FROM {self.TABLE} WHERE ts < ?", (cutoff,))
+        if detail_deleted:
+            import logging
+            logging.getLogger("router").info(
+                f"[usage] 清理过期记录 主表 {cur.rowcount or 0} 条 / 详情 {detail_deleted} 条"
+            )
         return cur.rowcount
+
+    def get_detail(self, log_id: int) -> dict | None:
+        """读取单条请求详情（CH-038）；主表无此行返回 None"""
+        row = self.query_one(f"SELECT * FROM {self.TABLE} WHERE id = ?", (log_id,))
+        if not row:
+            return None
+        detail = None
+        if self.DETAIL_TABLE in self._tables():
+            detail = self.query_one(
+                f"SELECT * FROM {self.DETAIL_TABLE} WHERE log_id = ?", (log_id,)
+            )
+        return {"summary": row, "detail": detail}
 
     @staticmethod
     def _range_clause(range_name: str) -> tuple[str, tuple]:

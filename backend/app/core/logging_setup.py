@@ -151,6 +151,10 @@ class RequestContextMiddleware:
 
     用纯 ASGI 实现（不依赖 BaseHTTPMiddleware），把请求体放进 scope["state"]，
     这样路由层与异常兜底都能拿到同一份上下文。
+
+    CH-038：补「已到达但客户端中途断开」的记录。此前这类请求既没有 access 日志、
+    也没有任何痕迹，排查时会被误判成「请求没来过」。检测到 http.disconnect 且
+    响应尚未开始时，记一条 status=499 disconnected=true。
     """
 
     def __init__(self, app, prefix: str = "/v1/"):
@@ -175,21 +179,31 @@ class RequestContextMiddleware:
         state = scope.setdefault("state", {})
         state["body_info"] = info
         state["request_snippet"] = _snippet(body)
+        # CH-038：同样的上下文也交给应用层（detail 采集用）；注意 scope["state"]
+        # 与 Starlette 的 request.state 是同一份 dict，故应用侧可直接读
+        state["request_body_raw"] = body
 
         client = scope.get("client") or ("-", 0)
         started = time.time()
         replayed = False
+        response_started = False
+        disconnected = False
 
         async def replay():
             # 首次交还缓存的请求体；之后交还原 receive（保持断开检测语义）
-            nonlocal replayed
+            nonlocal replayed, disconnected
             if not replayed:
                 replayed = True
                 return {"type": "http.request", "body": body, "more_body": False}
-            return await receive()
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                disconnected = True
+            return message
 
         async def send_wrapper(message):
+            nonlocal response_started
             if message["type"] == "http.response.start":
+                response_started = True
                 _log_access(scope, info, state, client, started, message["status"])
             await send(message)
 
@@ -200,10 +214,17 @@ class RequestContextMiddleware:
                 f"len={len(body)} snippet={state['request_snippet']}"
             )
 
-        await self.app(scope, replay, send_wrapper)
+        try:
+            await self.app(scope, replay, send_wrapper)
+        finally:
+            # 未发出响应就开始的请求：要么客户端提前断开，要么处理过程中异常退出。
+            # 两种情况都需要留下痕迹（异常路径已有全局兜底，这里只补断连）
+            if not response_started and disconnected:
+                _log_access(scope, info, state, client, started, 499, disconnected=True)
 
 
-def _log_access(scope, info: dict, state: dict, client, started: float, status: int) -> None:
+def _log_access(scope, info: dict, state: dict, client, started: float, status: int,
+                disconnected: bool = False) -> None:
     parts = [
         f"status={status}",
         f"elapsed={time.time() - started:.2f}s",
@@ -215,6 +236,8 @@ def _log_access(scope, info: dict, state: dict, client, started: float, status: 
         parts.append(f"messages={info['messages']}")
     if info.get("invalid"):
         parts.append(f"body=INVALID({info.get('reason')})")
+    if disconnected:
+        parts.append("disconnected=true")
     line = f"{scope.get('method', '?')} {scope.get('path', '?')} {' '.join(parts)}"
     if status >= 400:
         snippet = state.get("request_snippet", "")

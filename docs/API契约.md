@@ -696,10 +696,65 @@ Header: `Authorization: Bearer <token>`
 - **路径**: `GET /admin/api/usage/by-key?range=today|7d|30d`
 - **出参**: `{ "keys": [{ "api_key_id", "api_key_name", "requests", "success_count", "error_count", "total_tokens", "avg_duration_ms" }] }`
 
-### 4.30 用量明细（CH-019）
+### 4.30 用量明细（CH-019 / CH-038）
 
 - **路径**: `GET /admin/api/usage/logs?range=today|7d|30d&page=1&size=50&key_id=&model=&status=success|error`
 - **出参**: `{ "total": 128, "page": 1, "size": 50, "items": [ ...log_usage 行... ] }`（按 id 倒序）
+- **CH-038 增量**: 每行补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（旧库缺列时给 0 / 0 / 1）。**只增不改**，原有字段全部保留。
+
+### 4.30.1 单条请求详情（CH-038）
+
+- **路径**: `GET /admin/api/usage/logs/{log_id}`
+- **鉴权**: JWT
+- **出参**:
+
+```json
+{
+  "id": 12345,
+  "summary": {
+    "ts": 1792419416.5, "status": "success", "http_status": 200,
+    "protocol": "chat", "stream": 1,
+    "model": "deepseek-v4-1-flash", "upstream_model": "deepseek-v4.1-flash",
+    "upstream_id": "buddy", "upstream_name": "Buddy", "api_key_name": "trae",
+    "prompt_tokens": 60531, "cache_read_tokens": 50845, "cache_write_tokens": 0,
+    "completion_tokens": 379, "total_tokens": 60910, "estimated": 0,
+    "duration_ms": 352, "first_token_ms": 180, "attempt_count": 1,
+    "error_msg": null
+  },
+  "attempts": [
+    { "upstream": "buddy", "model": "deepseek-v4.1-flash",
+      "http_status": 200, "ms": 352, "error": null }
+  ],
+  "detail": {
+    "available": true,
+    "request_headers": { "user-agent": "...", "content-type": "application/json" },
+    "request_body": "{...}",
+    "forward_body": "{...}",
+    "response_body": "{...}",
+    "truncated": { "request_body": false, "forward_body": false, "response_body": true }
+  }
+}
+```
+
+- **说明**:
+  - 三栏语义：`request_body` = 客户端原始请求；`forward_body` = 实际发给上游的报文（含模型替换、`developer→system` 等改写）；`response_body` = 上游响应（流式只存首尾各 20 条片段）
+  - `detail.available=false` 时带 `reason`：未采集（成功请求 + `error_only` 模式）或早于功能上线
+  - `truncated` 标记哪一栏发生过截断（超过 `usage_detail_max_bytes`，保留头 3/4 + 尾 1/4）
+  - 报文已脱敏（`sk-xxxx` → `sk-xxxx****`），请求头只保留白名单字段
+  - `attempts` 为尝试链，长度与 `summary.attempt_count` 一致
+  - 400：`log_id` 不存在；401：无有效 JWT
+
+### 4.30.2 详情采集策略（CH-038）
+
+- **路径**: `GET /admin/api/config/usage-detail`
+- **出参**: `{ "mode": "error_only", "max_bytes": 1048576, "retention_days": 14 }`
+
+- **路径**: `PUT /admin/api/config/usage-detail`
+- **入参**: `{ "mode": "off|error_only|all", "max_bytes": 1048576, "retention_days": 14 }`
+  - `max_bytes` 可选，范围 1024 ~ 1048576
+  - `retention_days` 可选，范围 1 ~ 3650（UI 提供 7/14/30/90）
+- **出参**: `{ "ok": true }`
+- **错误**: 非法枚举或越界值 → 422
 
 ### 4.31 手动落库用量缓冲（CH-019，调试用）
 
@@ -984,6 +1039,8 @@ Header: `Authorization: Bearer <token>`
 | 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
 | 用量三层统计 | GET /admin/api/usage/summary\|by-model\|by-key\|logs | log_usage |
 | 用量按单元（号池核算） | GET /admin/api/usage/by-unit | log_usage(upstream_model) |
+| 请求详情（三栏报文 + 尝试链） | GET /admin/api/usage/logs/{log_id} | log_usage, log_usage_detail |
+| 详情采集与保留策略 | GET/PUT /admin/api/config/usage-detail | sys_setting(usage_detail_mode/max_bytes/retention_days) |
 | 延迟探测参数配置 | GET/PUT /admin/api/config/probe | sys_setting |
 | 重试参数配置 | GET/PUT /admin/api/config/retry | sys_setting |
 | 智能重试全局参数 | GET/PUT /admin/api/config/smart-retry | sys_setting(smart_retry) |
@@ -1002,3 +1059,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-08-12 | CH-018：三入站错误统一为各协议标准格式；messages/responses 入站补图片块映射（image/input_image → image_url）；推理模型 reasoning 映射（anthropic thinking / responses reasoning item）；新增 2.3 Responses 契约章节 | AI+用户 |
 | 2026-10-16 | CH-019：新增 4.7.3 单模型启停、4.7.4 模型重排、4.24~4.26 同名聚合组三端点、4.27~4.31 用量四端点+flush；/v1/models 过滤模型级禁用；503 错误信息带 `model@upstream` | AI+用户 |
 | 2026-10-16 | CH-020：聚合组成员支持异名（`upstreams[].model`）；新增 4.26.1 归一化建议、4.26.2 某源已配置模型两端点；4.24/4.25 补充 `members` 字段说明 | AI |
+| 2026-10-19 | CH-038：新增 4.30.1 单条请求详情（三栏报文 + 尝试链）、4.30.2 详情采集策略 GET/PUT；4.30 列表出参补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（只增不改） | AI |

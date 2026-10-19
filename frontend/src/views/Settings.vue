@@ -101,6 +101,51 @@
       </el-form>
     </BaseSection>
 
+    <!-- 用量与日志（CH-038） -->
+    <BaseSection variant="card" title="用量与日志" style="margin-top: 16px">
+      <BaseHint block style="margin-bottom: 12px"
+        text="请求详情会把原始请求、实际转发报文与上游响应一并存下来，便于排查。成功请求默认只记结构化字段与 token，失败请求才保存完整报文；保留期到期后主表与详情表会一起清理。" />
+      <el-form label-width="160px">
+        <el-row :gutter="16">
+          <el-col :span="8">
+            <el-form-item label="详情采集模式">
+              <el-select v-model="usageDetailForm.mode" style="width: 100%">
+                <el-option label="关闭（不采集报文）" value="off" />
+                <el-option label="仅失败请求（推荐）" value="error_only" />
+                <el-option label="全部请求" value="all" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="单报文上限">
+              <el-select v-model="usageDetailForm.max_bytes" style="width: 100%">
+                <el-option label="64 KB" :value="65536" />
+                <el-option label="256 KB" :value="262144" />
+                <el-option label="1 MB（推荐）" :value="1048576" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="日志保留期">
+              <el-select v-model="usageDetailForm.retention_days" style="width: 100%">
+                <el-option label="7 天" :value="7" />
+                <el-option label="14 天（默认）" :value="14" />
+                <el-option label="30 天" :value="30" />
+                <el-option label="90 天" :value="90" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <BaseHint block
+          text="选择「全部请求」会显著增加数据库体积与写入开销；超过上限的报文按「头 3/4 + 尾 1/4」截断并标注。修改保留期后，下一轮清理（最长 1 小时）按新值生效。" />
+        <el-form-item style="margin-top: 12px">
+          <BaseButton variant="primary" size="sm" :disabled="savingUsageDetail" @click="handleSaveUsageDetail">
+            {{ savingUsageDetail ? '保存中...' : '保存日志设置' }}
+          </BaseButton>
+        </el-form-item>
+      </el-form>
+    </BaseSection>
+
     <!-- 分组管理 -->
     <BaseSection variant="card" title="分组管理" style="margin-top: 16px">
       <template #actions>
@@ -153,6 +198,7 @@ import BaseHint from '@/components/base/BaseHint.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
 import { reloadConfig } from '@/api/common'
 import { listGroups, updateGroups } from '@/api/groups'
+import { getUsageDetailConfig, saveUsageDetailConfig } from '@/api/usage'
 import {
   getAutoAggregateConfig,
   getFailoverConfig,
@@ -175,6 +221,10 @@ const groupsForm = ref<{ name: string; description: string }[]>([])
 const autoAggregate = ref(false)
 const savingAutoAggregate = ref(false)
 
+/** CH-038：用量日志采集策略 */
+const usageDetailForm = reactive({ mode: 'error_only', max_bytes: 1048576, retention_days: 14 })
+const savingUsageDetail = ref(false)
+
 const retryForm = reactive<any>({})
 const failoverForm = reactive<any>({})
 const smartRetryForm = reactive<any>({ extra_attempts: 2, backoff_ms: [500, 1500], jitter: 0.2 })
@@ -184,15 +234,21 @@ async function load() {
   loading.value = true
   loadFailed.value = false
   try {
-    const [groups, retry, failover, smartRetry, autoAgg]: any = await Promise.all([
+    const [groups, retry, failover, smartRetry, autoAgg, usageDetail]: any = await Promise.all([
       listGroups(),
       getRetryConfig(),
       getFailoverConfig(),
       getSmartRetryConfig(),
       getAutoAggregateConfig().catch(() => ({ enabled: false })),
+      getUsageDetailConfig().catch(() => ({ mode: 'error_only', max_bytes: 1048576, retention_days: 14 })),
     ])
     groupsForm.value = (groups.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
     autoAggregate.value = Boolean(autoAgg?.enabled)
+    Object.assign(usageDetailForm, {
+      mode: usageDetail?.mode || 'error_only',
+      max_bytes: usageDetail?.max_bytes || 1048576,
+      retention_days: usageDetail?.retention_days || 14,
+    })
     Object.assign(retryForm, retry)
     Object.assign(failoverForm, failover)
     Object.assign(smartRetryForm, smartRetry)
@@ -263,6 +319,19 @@ async function handleSaveAutoAggregate(enabled: boolean) {
     ElMessage.error(e?.response?.data?.detail || '保存失败')
   } finally {
     savingAutoAggregate.value = false
+  }
+}
+
+async function handleSaveUsageDetail() {
+  savingUsageDetail.value = true
+  try {
+    await saveUsageDetailConfig({ ...usageDetailForm })
+    ElMessage.success('日志设置已保存')
+    await reloadConfig()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    savingUsageDetail.value = false
   }
 }
 

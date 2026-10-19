@@ -27,3 +27,21 @@ export function getUsageLogs(params: {
 }) {
   return request.get('/admin/api/usage/logs', { params })
 }
+
+/** 单条请求详情：summary + attempts + detail（三栏报文，CH-038） */
+export function getUsageLogDetail(logId: number) {
+  return request.get(`/admin/api/usage/logs/${logId}`)
+}
+
+/** 详情采集策略：mode / max_bytes / retention_days（CH-038） */
+export function getUsageDetailConfig() {
+  return request.get('/admin/api/config/usage-detail')
+}
+
+export function saveUsageDetailConfig(data: {
+  mode: string
+  max_bytes?: number
+  retention_days?: number
+}) {
+  return request.put('/admin/api/config/usage-detail', data)
+}

@@ -8,16 +8,75 @@ import copy
 import json
 import logging
 import random
+import time
 
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.config import AppConfig
 from app.core.health import ModelHealth
+from app.core.usage import (
+    current_attempts,
+    current_forward_body,
+    current_response_body,
+)
 
 log = logging.getLogger("router")
 
 SMART_RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
+# CH-038：详情报文采集上限（与 sys_setting.usage_detail_max_bytes 的默认值对齐；
+# 这里只是避免超大对象在内存里无限拷贝，最终截断由 UsageBuffer 按配置执行）
+_MAX_CAPTURE = 2 * 1024 * 1024
+
+
+def _capture_forward(modified: dict) -> None:
+    """记录实际发给上游的请求体（CH-038，供详情页 FORWARDED 栏）"""
+    try:
+        current_forward_body.set(json.dumps(modified, ensure_ascii=False)[:_MAX_CAPTURE])
+    except Exception:
+        pass
+
+
+def _capture_response(data) -> None:
+    """记录上游响应体（CH-038，供详情页 RESPONSE 栏）"""
+    try:
+        if isinstance(data, (dict, list)):
+            text = json.dumps(data, ensure_ascii=False)
+        elif isinstance(data, bytes):
+            text = data.decode("utf-8", "ignore")
+        else:
+            text = str(data)
+        current_response_body.set(text[:_MAX_CAPTURE])
+    except Exception:
+        pass
+
+
+def _elapsed_ms(t0: float) -> int:
+    """距 t0 的毫秒数（CH-038 尝试链耗时）"""
+    try:
+        return int((time.time() - t0) * 1000)
+    except Exception:
+        return 0
+
+
+def _note_attempt(upstream_id: str, model: str, http_status, ms: int,
+                  error: str | None = None) -> None:
+    """追加一条候选尝试记录（CH-038，供详情页重试链）"""
+    try:
+        items = current_attempts.get()
+        if items is None:
+            items = []
+            current_attempts.set(items)
+        items.append({
+            "upstream": upstream_id,
+            "model": model,
+            "http_status": http_status,
+            "ms": ms,
+            "error": (error or None) and str(error)[:300],
+        })
+    except Exception:
+        pass
 
 
 def _normalize_messages(body: dict) -> None:
@@ -137,8 +196,11 @@ async def try_non_stream(
         health.record_fail(upstream_id, model)
         return None
 
+    _capture_forward(modified)  # CH-038：实际转发体
+
     rl = _RetryLoop(app_config, upstream_id, model, keys)
     for _ in range(rl.budget):
+        t_attempt = time.time()  # CH-038：单次尝试计时
         api_key = app_config.key_pool.pick(upstream_id, keys)
         if not api_key:
             break
@@ -157,12 +219,14 @@ async def try_non_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"Key 连接超时 ({timeout_sec}s)")
             log.warning(f"Key 池 [{upstream_id}] Key 连接超时 ({timeout_sec}s)，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), "连接超时")
             continue
         except Exception as e:
             app_config.key_pool.record_fail(upstream_id, api_key)
             rl.on_failure(api_key)
             rl.log_retry(f"Key 连接异常: {e}")
             log.warning(f"Key 池 [{upstream_id}] Key 连接异常: {e}，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), f"连接异常: {e}")
             continue
 
         try:
@@ -173,6 +237,7 @@ async def try_non_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"Key 响应超时 ({timeout_sec}s)")
             log.warning(f"Key 池 [{upstream_id}] Key 响应超时 ({timeout_sec}s)，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), "响应超时")
             continue
         except Exception as e:
             await resp.aclose()
@@ -186,6 +251,8 @@ async def try_non_stream(
             await resp.aclose()
             app_config.key_pool.record_success(upstream_id, api_key)
             health.record_success(upstream_id, model)
+            _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt))
+            _capture_response(raw)  # CH-038：上游响应体
             return JSONResponse(status_code=200, content=json.loads(raw), headers=rl.response_headers())
         await resp.aclose()
         if resp.status_code in (401, 403, 429):
@@ -193,15 +260,21 @@ async def try_non_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"Key 返回 HTTP {resp.status_code}")
             log.warning(f"Key 池 [{upstream_id}] Key 返回 HTTP {resp.status_code}，换下一个 Key")
+            _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt),
+                          "Key 鉴权/限流失败，换 Key")
             continue
         if rl.retriable_status(resp.status_code):
             rl.on_failure(api_key)
             rl.log_retry(f"HTTP {resp.status_code}")
+            _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt),
+                          "可重试状态码")
             continue
         health.record_fail(upstream_id, model)
         # CH-037：带上上游响应体摘要，否则只知道 400 不知道为什么（排查时被迫直连号池）
         detail = _extract_error_detail(raw, resp.status_code)
         log.warning(f"模型 {model.split('/')[-1]} 返回错误: HTTP {resp.status_code} {detail}")
+        _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt), detail)
+        _capture_response(raw)  # CH-038：失败响应体也要留（排查最关键）
         return None
     return None
 
@@ -243,8 +316,11 @@ async def try_stream(
         health.record_fail(upstream_id, model)
         return None
 
+    _capture_forward(modified)  # CH-038：实际转发体
+
     rl = _RetryLoop(app_config, upstream_id, model, keys)
     for _ in range(rl.budget):
+        t_attempt = time.time()  # CH-038：单次尝试计时
         api_key = app_config.key_pool.pick(upstream_id, keys)
         if not api_key:
             break
@@ -263,12 +339,14 @@ async def try_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"流式响应头超时 ({response_timeout}s)")
             log.warning(f"Key 池 [{upstream_id}] Key 流式响应头超时 ({response_timeout}s)，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), "流式响应头超时")
             continue
         except Exception as e:
             app_config.key_pool.record_fail(upstream_id, api_key)
             rl.on_failure(api_key)
             rl.log_retry(f"Key 流式连接异常: {e}")
             log.warning(f"Key 池 [{upstream_id}] Key 流式连接异常: {e}，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), f"流式连接异常: {e}")
             continue
 
         if resp.status_code != 200:
@@ -279,15 +357,21 @@ async def try_stream(
                 rl.on_failure(api_key)
                 rl.log_retry(f"Key 返回 HTTP {resp.status_code}")
                 log.warning(f"Key 池 [{upstream_id}] Key 返回 HTTP {resp.status_code}，换下一个 Key")
+                _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt),
+                              "Key 鉴权/限流失败，换 Key")
                 continue
             if rl.retriable_status(resp.status_code):
                 rl.on_failure(api_key)
                 rl.log_retry(f"流式 HTTP {resp.status_code}（首字节前）")
+                _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt),
+                              "可重试状态码（首字节前）")
                 continue
             health.record_fail(upstream_id, model)
             # CH-037：带上上游响应体摘要，否则只知道 400 不知道为什么
             detail = _extract_error_detail(err_raw, resp.status_code)
             log.warning(f"模型 {model.split('/')[-1]} 流式返回错误: HTTP {resp.status_code} {detail}")
+            _note_attempt(upstream_id, model, resp.status_code, _elapsed_ms(t_attempt), detail)
+            _capture_response(err_raw)  # CH-038：失败响应体
             return None
 
         line_iter = resp.aiter_lines()
@@ -301,6 +385,7 @@ async def try_stream(
             rl.on_failure(api_key)
             rl.log_retry("流式空响应")
             log.warning(f"Key 池 [{upstream_id}] Key 流式空响应，换下一个 Key")
+            _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt), "流式空响应")
             continue
         except (asyncio.TimeoutError, httpx.TimeoutException):
             await resp.aclose()
@@ -308,22 +393,42 @@ async def try_stream(
             rl.on_failure(api_key)
             rl.log_retry(f"首包超时 ({first_chunk_timeout}s)")
             log.warning(f"Key 池 [{upstream_id}] Key 首包超时 ({first_chunk_timeout}s)，换下一个 Key")
+            _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), "首包超时")
             continue
 
         app_config.key_pool.record_success(upstream_id, api_key)
         health.record_success(upstream_id, model)
+        _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt))
 
         async def generate():
+            head_chunks: list[str] = []
+            tail_chunks: list[str] = []
             try:
                 if first_line:
                     yield first_line + "\n\n"
+                    head_chunks.append(first_line)
                 async for line in line_iter:
                     if line:
                         yield line + "\n\n"
+                        # CH-038：只留头部与尾部片段，避免把整段流式内容堆在内存
+                        if len(head_chunks) < 20:
+                            head_chunks.append(line)
+                        else:
+                            tail_chunks.append(line)
+                            if len(tail_chunks) > 20:
+                                tail_chunks.pop(0)
             except Exception as e:
                 log.error(f"流式传输中断: {model.split('/')[-1]} {e}")
                 health.record_fail(upstream_id, model)
             finally:
+                # CH-038：把流式首尾片段作为 RESPONSE 详情（完整流不落库）
+                try:
+                    current_response_body.set(
+                        "\n".join(head_chunks + (["…"] + tail_chunks if tail_chunks else []))
+                        [:_MAX_CAPTURE]
+                    )
+                except Exception:
+                    pass
                 try:
                     await resp.aclose()
                 except Exception:

@@ -112,7 +112,10 @@
       </el-table>
 
       <!-- 明细 -->
-      <h4 style="margin: 16px 0 8px">最近请求明细</h4>
+      <h4 style="margin: 16px 0 8px">
+        最近请求明细
+        <BaseHint inline text="— 点击任意一行查看原始请求 / 实际转发 / 上游响应 三栏对比" />
+      </h4>
       <div class="log-filters">
         <el-select v-model="logStatus" size="small" style="width: 110px" @change="loadLogs">
           <el-option label="全部状态" value="" />
@@ -121,7 +124,8 @@
         </el-select>
         <el-input v-model="logModel" size="small" placeholder="按模型名过滤…" style="width: 220px" clearable @change="loadLogs" />
       </div>
-      <el-table :data="logs" stripe size="small" v-loading="logsLoading">
+      <el-table :data="logs" stripe size="small" v-loading="logsLoading"
+        row-class-name="log-row-clickable" @row-click="openDetail">
         <el-table-column label="时间" width="100">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
@@ -139,12 +143,26 @@
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <BaseBadge :variant="row.status === 'success' ? 'green' : 'red'">{{ row.status === 'success' ? '成功' : '失败' }}</BaseBadge>
+            <BaseBadge :variant="row.status === 'success' ? 'green' : (row.http_status === 499 ? 'amber' : 'red')">
+              {{ row.status === 'success' ? '成功' : (row.http_status === 499 ? '断开' : '失败') }}
+            </BaseBadge>
           </template>
         </el-table-column>
-        <el-table-column label="Tokens" width="110">
+        <el-table-column label="Tokens（输入/缓存/输出）" width="170">
           <template #default="{ row }">
-            {{ row.total_tokens }}<BaseHint v-if="row.estimated" inline text="（估算）" />
+            <span class="token-cell">
+              {{ row.prompt_tokens ?? 0 }}
+              <span class="token-sep">/</span>
+              <span :class="{ 'token-cache': (row.cache_read_tokens || 0) > 0 }">{{ row.cache_read_tokens ?? 0 }}</span>
+              <span class="token-sep">/</span>
+              {{ row.completion_tokens ?? 0 }}
+            </span>
+            <BaseHint v-if="row.estimated" inline text="（估算）" />
+          </template>
+        </el-table-column>
+        <el-table-column label="尝试" width="70">
+          <template #default="{ row }">
+            <span :class="{ 'attempt-retry': (row.attempt_count || 1) > 1 }">{{ row.attempt_count || 1 }}</span>
           </template>
         </el-table-column>
         <el-table-column label="耗时" width="90">
@@ -162,6 +180,8 @@
         @change="loadLogs"
       />
     </BaseSection>
+
+    <RequestDetailDrawer v-model:visible="detailVisible" :log-id="detailLogId" />
   </div>
 </template>
 
@@ -174,6 +194,7 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import BasePagination from '@/components/base/BasePagination.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import RequestDetailDrawer from '@/components/usage/RequestDetailDrawer.vue'
 import { getUsageByKey, getUsageByUnit, getUsageLogs, getUsageByModel, getUsageSummary } from '@/api/usage'
 
 const range = ref('today')
@@ -190,6 +211,16 @@ const logSize = 50
 const logTotal = ref(0)
 const logStatus = ref('')
 const logModel = ref('')
+
+/** CH-038：请求详情抽屉 */
+const detailVisible = ref(false)
+const detailLogId = ref<number | null>(null)
+
+function openDetail(row: any) {
+  if (!row?.id) return
+  detailLogId.value = row.id
+  detailVisible.value = true
+}
 
 const rateColor = computed(() => {
   const r = summary.value.success_rate
@@ -273,5 +304,22 @@ onMounted(load)
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
+}
+.token-cell {
+  font-variant-numeric: tabular-nums;
+}
+.token-sep {
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+.token-cache {
+  color: var(--accent-green);
+}
+.attempt-retry {
+  color: var(--accent-amber);
+  font-weight: 600;
+}
+:deep(.log-row-clickable) {
+  cursor: pointer;
 }
 </style>

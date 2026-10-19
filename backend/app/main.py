@@ -23,7 +23,16 @@ from app.core.logging_setup import (
 )
 from app.core.probe import LatencyProbe
 from app.core.security import get_jwt_secret
-from app.core.usage import UsageBuffer, current_api_key_id, current_api_key_name
+from app.core.usage import (
+    UsageBuffer,
+    current_api_key_id,
+    current_api_key_name,
+    current_attempts,
+    current_forward_body,
+    current_request_body,
+    current_request_headers,
+    current_response_body,
+)
 from app.services.auth_service import AuthService
 from app.services.config_service import ConfigService
 from app.services.dashboard_service import DashboardService
@@ -48,7 +57,10 @@ health = ModelHealth(
     cooldown_seconds=failover_cfg.get("cooldown_seconds", 120),
 )
 probe = LatencyProbe(config)
-usage_buffer = UsageBuffer(retention_days=int(config._settings.get("usage_retention_days", 30)))
+usage_buffer = UsageBuffer(
+    retention_days=int(config._settings.get("usage_retention_days", 14)),
+    settings_getter=lambda: config._settings,
+)
 HTTP_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), verify=False)
 
 # ============================================================
@@ -146,6 +158,15 @@ async def require_api_key(request: Request, call_next):
                 break
         current_api_key_id.set(api_key_id)
         current_api_key_name.set(key_entry.get("name", ""))
+        # CH-038：把入站请求体与请求头贯穿到用量采集（用于请求详情）
+        # 请求头只保留排查有用的白名单字段，凭据一律不落
+        raw_body = getattr(request.state, "request_body_raw", b"") or b""
+        if raw_body:
+            current_request_body.set(raw_body.decode("utf-8", "ignore"))
+        current_request_headers.set({
+            k: v for k, v in request.headers.items()
+            if k.lower() in ("user-agent", "content-type", "accept", "accept-encoding")
+        })
     return await call_next(request)
 
 

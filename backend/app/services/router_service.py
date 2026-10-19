@@ -21,7 +21,9 @@ from app.core.usage import (
     UsageBuffer,
     current_api_key_id,
     current_api_key_name,
+    current_attempts,
     estimate_tokens_by_chars,
+    parse_cache_tokens,
 )
 from app.upstream import (
     try_non_stream,
@@ -54,6 +56,10 @@ class _UsageTracker:
         self.usage_seen = False
         self.injected_usage = False  # True=中转站主动注入 stream_options（末 chunk 需剥离）
         self.upstream_model: str | None = None  # 上游真实模型名（异名聚合时与请求名不同）
+        # CH-038：缓存 token 与尝试次数
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
+        self.attempt_count = 1
         # 流式输出文本累计（估算降级用）
         self._stream_text_len = 0
 
@@ -82,6 +88,12 @@ class _UsageTracker:
                 self.completion_tokens = ct
                 self.total_tokens = usage.get("total_tokens", pt + ct) or (pt + ct)
                 self.usage_seen = True
+            # CH-038：缓存 token（多命名兼容）
+            cr, cw = parse_cache_tokens(usage)
+            if cr:
+                self.cache_read_tokens = cr
+            if cw:
+                self.cache_write_tokens = cw
         choices = data.get("choices") or []
         if choices:
             delta = choices[0].get("delta") or {}
@@ -102,6 +114,12 @@ class _UsageTracker:
             self.completion_tokens = ct
             self.total_tokens = usage.get("total_tokens", pt + ct) or (pt + ct)
             self.usage_seen = True
+            # CH-038：缓存 token
+            cr, cw = parse_cache_tokens(usage)
+            if cr:
+                self.cache_read_tokens = cr
+            if cw:
+                self.cache_write_tokens = cw
         else:
             self._estimate()
             self.completion_tokens = self._response_text_len(data)
@@ -168,6 +186,8 @@ class _UsageTracker:
         buffer: UsageBuffer | None = getattr(self.cfg, "_usage_buffer", None)
         if buffer is None:
             return
+        # CH-038：尝试链长度即尝试次数（适配器逐候选追加）
+        attempts = current_attempts.get() or []
         buffer.record({
             "ts": time.time(),
             "api_key_id": current_api_key_id.get(),
@@ -183,6 +203,9 @@ class _UsageTracker:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "attempt_count": max(1, len(attempts)),
             "estimated": self.estimated,
             "duration_ms": int((time.time() - self.t0) * 1000),
             "first_token_ms": self.first_token_ms,
