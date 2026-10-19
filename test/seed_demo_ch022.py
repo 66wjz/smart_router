@@ -170,8 +170,12 @@ SETTINGS = {
         {"name": "free", "description": "免费分组（默认）"},
         {"name": "premium", "description": "付费分组"},
     ],
-    "auto_same_name_aggregate": True,
-    "usage_retention_days": 30,
+    # CH-036：同名模型自动聚合默认关闭（跨源兜底不受影响）
+    "auto_same_name_aggregate": False,
+    # CH-038：日志保留期默认 14 天；详情采集默认仅失败请求
+    "usage_retention_days": 14,
+    "usage_detail_mode": "error_only",
+    "usage_detail_max_bytes": 1048576,
 }
 
 
@@ -184,7 +188,7 @@ def drop_all(conn: sqlite3.Connection) -> None:
         "rule_candidate", "rule_rule", "api_api_key", "up_upstream_key", "up_upstream",
         "pt_pointer", "agg_aggregated_name", "agg_model_group", "agg_probe_config",
         "agg_unified", "agg_probe_template",
-        "log_usage", "sys_setting",
+        "log_usage", "log_usage_detail", "sys_setting",
     ]
     for t in tables:
         conn.execute(f"DROP TABLE IF EXISTS {t}")
@@ -449,6 +453,12 @@ def main() -> None:
             "increment/06_增量_20261017_聚合探测配置.sql",
             # CH-023：统一聚合 + 探测模板（迁移会自动把上面的旧表数据搬进新表）
             "increment/07_增量_20261017_聚合统一与探测模板.sql",
+            # CH-024 / CH-034 / CH-036：规则绑定、聚合分组、自动聚合开关
+            "increment/08_增量_20261017_聚合规则绑定.sql",
+            "increment/09_增量_20261018_聚合分组.sql",
+            "increment/10_增量_20261018_自动聚合开关默认关闭.sql",
+            # CH-038：log_usage 三列 + log_usage_detail 详情表
+            "increment/11_增量_20261019_请求详情可观测性.sql",
         ):
             run_sql(conn, fn)
 

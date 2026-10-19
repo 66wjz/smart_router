@@ -72,7 +72,8 @@ REMOTE_DB = f"{REMOTE_BACKEND}/smart_router.db"
 SERVICE_OWNER = "wjz666123"
 
 # 需要按序执行的迁移脚本（顺序不可调换：06 建 agg_model_group/agg_probe_config，07 才引用它们；
-# 09 给 agg_unified 加 groups 列，10 依赖该列并做清理与开关翻转）
+# 09 给 agg_unified 加 groups 列，10 依赖该列并做清理与开关翻转；
+# 11 给 log_usage 补 cache_*/attempt_count 三列并建 log_usage_detail，必须更早于重启）
 MIGRATE_FILES = (
     "sql/06_用量统计与自动聚合.sql",
     "sql/increment/06_增量_20261017_聚合探测配置.sql",
@@ -80,6 +81,7 @@ MIGRATE_FILES = (
     "sql/increment/08_增量_20261017_聚合规则绑定.sql",
     "sql/increment/09_增量_20261018_聚合分组.sql",
     "sql/increment/10_增量_20261018_自动聚合开关默认关闭.sql",
+    "sql/increment/11_增量_20261019_请求详情可观测性.sql",
 )
 
 # 远端执行迁移的助手脚本：逐条执行、容忍 duplicate column、其余错误立即报错退出
@@ -173,7 +175,23 @@ print("/v1/models:", st, "total:", len(ids), "aggregation entries:", agg_ids)
 missing = [n for n in expected if n not in ids]
 print("aggregations missing from /v1/models:", missing)
 
-ok = (st == 200 and auto_off and not auto_found and has_groups and not missing)
+# CH-038：新表 + 主表三列 + 设置端点
+tabs = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+cols = {r[1] for r in con.execute("PRAGMA table_info(log_usage)")}
+detail_table = "log_usage_detail" in tabs
+new_cols = {"cache_read_tokens", "cache_write_tokens", "attempt_count"} <= cols
+print("log_usage_detail:", detail_table, "new columns:", new_cols)
+st2, body2 = http("GET", "/admin/api/config/usage-detail", token=token)
+if st2 == 200:
+    cfg2 = json.loads(body2)
+    usage_ok = cfg2.get("mode") in ("off", "error_only", "all")
+    print("usage-detail:", st2, body2.strip()[:80])
+else:
+    usage_ok = False
+    print("usage-detail:", st2, body2.strip()[:80])
+
+ok = (st == 200 and auto_off and not auto_found and has_groups and not missing
+      and detail_table and new_cols and usage_ok)
 print("SMOKE_OK" if ok else "SMOKE_FAIL")
 '''
 
