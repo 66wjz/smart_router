@@ -109,6 +109,51 @@ def _build_endpoint(base_url: str, path: str) -> str:
     return f"{base}{path}"
 
 
+def _extract_wrapped_error(payload) -> str | None:
+    """识别「HTTP 200 + 错误包」这种软失败（CH-040）
+
+    部分上游/号池把业务错误包在 200 响应体里返回，而不是用 4xx/5xx。
+    真实案例（号池 buddy 渠道）：
+        {"choices":[],"error":{"message":"...Illegal API invocation from
+         an unapproved channel","code":"INVALID_REQUEST","status":400}}
+
+    这类响应一旦被当成成功，会同时错三件事：记账记成 success、详情按成功
+    策略丢弃、且不会切换到下一个源重试。
+
+    返回错误摘要字符串（判为软失败），或 None（视为正常响应）。
+    """
+    if not isinstance(payload, dict):
+        return None
+    err = payload.get("error")
+    if not err:
+        return None
+    # 有正常业务载荷时不算软失败（个别上游会同时带 error 和 choices）
+    for key in ("choices", "output", "data", "content"):
+        if payload.get(key):
+            return None
+    if isinstance(err, dict):
+        parts = [str(x) for x in (err.get("message"), err.get("code"), err.get("status")) if x]
+        text = " | ".join(parts) if parts else json.dumps(err, ensure_ascii=False)
+    else:
+        text = str(err)
+    return (text[:300] or "上游返回错误包（无详细说明）")
+
+
+def _parse_sse_error_line(line: str) -> str | None:
+    """从 SSE 单行判断是否为错误包（CH-040）"""
+    text = (line or "").strip()
+    if not text.startswith("data:"):
+        return None
+    payload = text[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return None
+    return _extract_wrapped_error(data)
+
+
 def _sr_backoff(sr_cfg: dict, same_key_index: int) -> float:
     """智能重试同 Key 退避秒数：backoff_ms 逐级升级 + ±jitter 抖动"""
     backoff_ms = sr_cfg.get("backoff_ms", [500, 1500]) or [500, 1500]
@@ -249,11 +294,27 @@ async def try_non_stream(
 
         if resp.status_code == 200:
             await resp.aclose()
+            # CH-040：200 但响应体是错误包 → 按失败处理并切换候选
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = None
+            wrapped_error = _extract_wrapped_error(parsed)
+            if wrapped_error:
+                app_config.key_pool.record_fail(upstream_id, api_key)
+                rl.on_failure(api_key)
+                rl.log_retry(f"响应体错误包: {wrapped_error[:80]}")
+                log.warning(f"模型 {model.split('/')[-1]} 返回 200 但响应体是错误包: "
+                            f"{wrapped_error[:120]}，视为失败并重试")
+                _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt), wrapped_error)
+                _capture_response(raw)
+                health.record_fail(upstream_id, model)
+                continue
             app_config.key_pool.record_success(upstream_id, api_key)
             health.record_success(upstream_id, model)
             _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt))
             _capture_response(raw)  # CH-038：上游响应体
-            return JSONResponse(status_code=200, content=json.loads(raw), headers=rl.response_headers())
+            return JSONResponse(status_code=200, content=parsed, headers=rl.response_headers())
         await resp.aclose()
         if resp.status_code in (401, 403, 429):
             app_config.key_pool.record_fail(upstream_id, api_key)
@@ -394,6 +455,20 @@ async def try_stream(
             rl.log_retry(f"首包超时 ({first_chunk_timeout}s)")
             log.warning(f"Key 池 [{upstream_id}] Key 首包超时 ({first_chunk_timeout}s)，换下一个 Key")
             _note_attempt(upstream_id, model, None, _elapsed_ms(t_attempt), "首包超时")
+            continue
+
+        # CH-040：首行若为「200 + 错误包」，此时还没向客户端发任何字节，
+        # 仍然可以按失败处理并切换候选；不能把业务错误当成功。
+        first_error = _parse_sse_error_line(first_line)
+        if first_error:
+            await resp.aclose()
+            app_config.key_pool.record_fail(upstream_id, api_key)
+            rl.on_failure(api_key)
+            rl.log_retry(f"响应体错误包: {first_error[:80]}")
+            log.warning(f"模型 {model.split('/')[-1]} 返回 200 但响应体是错误包: {first_error[:120]}，视为失败并重试")
+            _note_attempt(upstream_id, model, 200, _elapsed_ms(t_attempt), first_error)
+            _capture_response(first_line)
+            health.record_fail(upstream_id, model)
             continue
 
         app_config.key_pool.record_success(upstream_id, api_key)

@@ -5,6 +5,54 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-20 - CH-040 补充：用户带来第三方分析，本机实测修正首轮结论
+- 触发：用户提供一份第三方 AI 分析（称腾讯 WorkBuddy 渠道维护了「非官方 agent 客户端」黑名单，按 system 消息首行精确匹配），并授权「用本机 127.0.0.1:8326 测」
+- 本机对照实验（`buddy/deepseek-v4.1-flash`，只读探测，不改配置）：
+  - `You are an AI agent powered by DeepSeek Harness.` → **拦截**
+  - 前加空格 / 换行 / 无关一句 → 通过
+  - `agent` → `assistant`、加逗号 → 通过
+  - 仅 `.` → `?` → **仍拦截**
+  - 无 system → 通过
+- **首轮结论被推翻**：首轮说「号池侧偶发策略」，实为**内容精确匹配**。首轮错在取样维度——只按 UA/Key/upstream 分组，从未看 `request_body.messages[0]`
+- **首轮推论也被修正**：首轮说「11 源同网关，聚合切换绕不过」，实测为**按渠道判定** —— `trae` 渠道放行、`buddy` 渠道拦截，跨渠道切换真实有效
+- **状态码链路差异**（解释 CH-040 为何必须解析首行）：直连非流式 400、网关聚合非流式 502、**流式一律 200 + SSE 内塞 error**（生产库记的正是这一形态），因为 SSE 响应头已发出后无法改状态码
+- **DSH 侧发现官方开关**：`@deepseek-ai/dsh-system-prompt` 的 `SystemPrompt.Config.includeHarnessIdentity`（默认 true），置 false 即不注入，比改字符串干净
+- 文档同步：CH-040 文档新增第五节「真正触发条件」+ 第九节「职责边界」；需求规格 9.7 修正并新增条目；变更记录补章
+- 只读原则：全程未改 DSH 配置、未改中转站请求内容、未伪装 UA；临时探测脚本已删除
+
+### 2026-10-20 - CH-040 上游「200 + 错误包」误判为成功：修 A 线
+- 授权链：用户反馈 DSH 报 `buddy: 请求被拦截... Illegal API invocation from an unapproved channel`，但中转站显示成功 → 我出定位与方案 → 用户「可以，按照你这个来，注意我是在 dsh 中用出现的这个问题…这个也一样考虑上」→ **用户纠正流程「不要直接改，先加载 skill，跟着流程来做，这也是一次 bug 修复了嘛」** → 我加载 skill、补写变更文档后重走 A 线
+- 用户澄清语义：「我说的切换源是聚合模型，我们聚合模型有好几家的聚合到一起了，用户请求这个模型，路由到了第一个，第一个失败了，会不会在用这个聚合里面的别的发请求」→ 确认聚合 `deepseek-v4-1-flash` 有 3 成员、`max_attempts=3`，链路能力本就存在，只是被 200+错误包堵死
+- 分类（铁律 7）：代码未按设计意图实现 → **A 线（bug）**
+- 定位（铁律 2）：详情表取到 `log_id=8661` 原始响应体 —— **HTTP 200 + `choices: []` + `error{INVALID_REQUEST, status:400}`**；主表记 success、`completion=0`、`estimated=1`；UA 分组显示 DSH 2 成功 1 失败；同 Key 同源 `8660` 成功（84s/4952 tok）、`8661` 失败 → 偶发
+- 推翻初版方案（**关键决策**）：原打算透传客户端 UA 给上游。取证发现 11 个上游源共用同一 Key 与同一 `base_url`（`127.0.0.1:8326`），失败与成功请求 UA 完全相同 → UA 不是区分变量。判定 `unapproved channel` 属号池侧策略，我们只做「正确识别 + 正确记账 + 正确重试」，不伪装 UA
+- 改动（3 处）：`_extract_wrapped_error` / `_parse_sse_error_line` 两个判定函数；`try_stream` 首行判定（此时未向客户端发任何字节，可安全切候选）；`try_non_stream` 200 分支先解析再判定；`_UsageTracker.stream_error` 覆盖「首行之后才报错」
+- 验证：`test/verify_wrapped_error_ch040.py` **36 项全通过**，含用户实际场景「agg_unified 2 成员首成员错误包 → 切到 src_good」（流式+非流式，断言 `attempt_count=2`、`upstream_id=src_good`）；离线回归 7 套通过
+- **一个假失败（教训）**：首轮 [7][8] 失败看似 contextvar 串扰，插桩一度误导。真因是测试脚本自己把 `src_bad` 唯一 Key 打到 `max_fails=3` 触发 120s 冷却，`pick()` 返回 `None` 后直接 `break`，根本没发请求。**铁律 4 的价值在此体现：没有猜测式改代码，而是继续取证直到拿到 key_pool 状态**
+- **另一处教训（结论层面）**：首轮把根因判为「号池侧偶发、无法定位」，实为**取样维度不足**（只看元数据没看请求内容）。后续本机实测推翻了该结论，详见上一条
+- 未提交、未部署（用户要求攒批次）
+
+### 2026-10-20 - CH-039 流式 usage 透传：修 A 线 + 部署上线 10.10.0.2
+- 授权链：用户反馈「DSH 能正常对话，但显示 `1轮1步 · 0 tok/s`、上下文 `0%`」→ 我出定位报告与方案 → 用户「可以，就按照这个方案来」→ 我按 A 线改 + 验证 → 用户「先部署吧，不着急推送。等多更新一些功能，算一个小版本后一推送」
+- 分类（铁律 7）：代码未按设计意图实现 → **A 线（bug）**，不写变更文档改设计
+- 定位（铁律 2，先定位再改）：生产只读取证 `estimated=0/200`（服务端确实解析到真实 token）→ 近 3000 行日志 `1458 POST /v1/chat/completions`、`/v1/messages` 与 `/v1/responses` 各 0 条 → 缩小到 chat 流式路径 → `router_service.py` L395 把 `tracker.injected_usage` 当 `client_wants_usage` 传入（两者语义相反）
+- 影响面尤点：客户端不传 → 注入 → `injected=True` → 剥离；客户端**传了** → 不注入 → `injected=False` → **同样剥离**。殊途同归，所有流式客户端一律收不到 usage
+- 改动（单点，铁律 3）：注入分支之前先记录 `client_wants_usage`；`_forward()` 新增该参数并透传；`_wrap_stream_with_usage()` 改收真实意图；`injected_usage` 保留但改注释，明确不参与剥离决策
+- 验证：`test/verify_usage_passthrough_ch039.py` 19 项全通过（两种客户端意图 + 记账 + 正文完整 + 非流式）；回归 7 套全通过；`compileall` 0 错误
+- 同类勘察（本次不修、已登记需求规格 9.7）：Anthropic 入站 `message_start`/`message_delta` usage 写死 0；Responses 入站 `response.completed` 无 usage。依据是两者生产流量为 0
+- 部署：9 步全过、`SMOKE_OK`，备份 `/opt/smart-router/backup/20261020-002036`
+- **顺带修复部署卫生**：发现 `backend/.tmp_ch039/t.db` 被同步进生产（Windows 上 SQLite 文件锁使验证脚本的 rmtree 静默失败，而 `_skip_backend` 只按文件名挡 db）→ 改排除规则为「目录名 + 后缀」双重排除，并清理本地与远端临时目录
+- **未提交、未推送**（用户要求攒够一批再作为一个版本推送）
+
+### 2026-10-19 - v5.2.1 全量部署上线 10.10.0.2（用户授权「执行吧」）
+- 授权链：用户先说「等你提交完，我换了模型再部署」→ 提交推送完成（67be8e3 / bc79aff / 51f47ae）→ 用户看到 README 版本号未同步，指出「不能只改号码，各文档都要对得上」→ 修正 6 处一致性缺陷并推送 → 用户「好的，执行吧」
+- 前置问题 1（**会静默毁数据**）：部署脚本 `MIGRATE_FILES` 漏了 `increment/11`，重启后新代码写 `log_usage` 三列与 `log_usage_detail` 会全部失败。已在 51f47ae 补齐并加冒烟断言
+- 前置问题 2（隐私）：脚本第 382 行硬编码管理员密码（明文），已改为从生产库读取且不打印。**该密码仍在 git 历史中**，是否清洗/轮换待用户决定
+- 凭据路径：本机 `~/.ssh` 只有 known_hosts、无密钥，探测返回 `No authentication methods available` → 必须用密码；经确认后由用户提供，用 `$env:SR_SSH_PASS` 单次传入
+- 执行前校验：`--dry-run` 通过（backend 80 / sql 14 / dist 52）；确认 sql 清单含 increment/11、dist 为最新构建且 Usage 分块含详情抽屉文案
+- 部署结果：9 步全过，备份 `/opt/smart-router/backup/20261019-232936`；启动日志 `11 上游源, 3 规则, 6 密钥, 1 别名, 12 聚合`（配置未清空，预迁移策略生效）；`log_usage_detail`、三列、`/config/usage-detail` 全部就位；`SMOKE_OK`
+- 未做：未提交部署脚本的隐私修改与本次台账更新（按规则不擅自提交，等用户指示）
+
 ### 2026-10-19 - CH-038 请求详情可观测性 + 断连记录（B 线-中 + A 线）
 - 触发：用户反馈 Trae 21:54 报 `WebSocket ... (HTTP Status: 500)`，但中转站查不到；同时希望日志能记录请求体与上下文长度
 - 定位（先定位再改）：四层日志（应用 / journalctl / uvicorn socket / 无 nginx）全无 500，`NRestarts=0` → 请求未到达应用层；`error sending request` 属发送阶段失败，TCP 阶段物理上无法记录（该边界写入文档 + UI 提示，避免再被误判成「网关丢日志」）

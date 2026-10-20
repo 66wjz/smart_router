@@ -8,6 +8,8 @@ backend/demo.db
 backend/demo.db-journal
 backend/demo.db-wal
 backend/demo.db-shm
+# 验证脚本的临时库目录（Windows 上 SQLite 文件锁会让 rmtree 静默失败）
+backend/.tmp_*/
 *.sqlite
 *.sqlite3
 test/_sanitize_secrets.py

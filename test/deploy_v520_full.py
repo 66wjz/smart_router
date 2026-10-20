@@ -197,12 +197,20 @@ print("SMOKE_OK" if ok else "SMOKE_FAIL")
 
 
 def _skip_backend(rel_posix: str) -> bool:
-    """排除数据库、虚拟环境、日志、缓存（这些不能从本地覆盖到生产）"""
+    """排除虚拟环境、数据库、日志、缓存、临时目录（这些不能从本地覆盖到生产）
+
+    CH-039 修正：原来只按文件名挡 smart_router.db / demo.db。本地跑验证脚本会在
+    backend/.tmp_* 下留测试库（Windows 上 SQLite 文件锁会让清理静默失败），
+    于是测试库被同步进了生产。改为「目录名 + 后缀」双重排除。
+    """
     parts = rel_posix.split("/")
     if any(p in (".venv", "__pycache__", "logs") for p in parts):
         return True
+    if any(p.startswith(".tmp_") for p in parts):
+        return True
     name = parts[-1]
-    return name.startswith("smart_router.db") or name.startswith("demo.db")
+    return name.endswith(".db") or name.endswith(".db-journal") \
+        or name.endswith(".db-wal") or name.endswith(".db-shm")
 
 
 def make_archive(local_root: str, out_path: str, skip=None) -> int:
@@ -376,10 +384,23 @@ def main() -> int:
         print(run(client, "systemctl restart smart-router && sleep 7 && systemctl is-active smart-router"))
         print(run(client, "curl -s -o /dev/null -w 'GET /            -> %{http_code}\\n' http://127.0.0.1:10002/"))
         print(run(client, "curl -s -o /dev/null -w 'GET /health      -> %{http_code}\\n' http://127.0.0.1:10002/health"))
-        print(run(client,
-                  "curl -s -o /dev/null -w 'POST /admin/api/login -> %{http_code}\\n' -X POST "
-                  "http://127.0.0.1:10002/admin/api/login -H 'Content-Type: application/json' "
-                  "-d '{\"username\":\"admin\",\"password\":\"smart-router-2026\"}'"))
+        # 登录冒烟：账号密码从生产库读取（不硬编码、不打印），避免把凭据写进仓库
+        print(run(client, (
+            "cd /opt/smart-router/backend && .venv/bin/python - <<'PYEOF'\n"
+            "import json, sqlite3, urllib.error, urllib.request\n"
+            "con = sqlite3.connect('smart_router.db')\n"
+            "row = con.execute(\"SELECT value FROM sys_setting WHERE key='admin'\").fetchone()\n"
+            "cfg = json.loads(row[0]) if row else {}\n"
+            "body = json.dumps({'username': cfg.get('username', 'admin'),"
+            " 'password': cfg.get('password', '')}).encode()\n"
+            "req = urllib.request.Request('http://127.0.0.1:10002/admin/api/login',"
+            " data=body, method='POST')\n"
+            "req.add_header('Content-Type', 'application/json')\n"
+            "try:\n"
+            "    print('POST /admin/api/login ->', urllib.request.urlopen(req, timeout=15).status)\n"
+            "except urllib.error.HTTPError as e:\n"
+            "    print('POST /admin/api/login ->', e.code)\n"
+            "PYEOF")))
         print(run(client,
                   "curl -s -o /dev/null -w 'POST /v1/chat/completions 无Key -> %{http_code}\\n' -X POST "
                   "http://127.0.0.1:10002/v1/chat/completions -H 'Content-Type: application/json' -d '{}'"))

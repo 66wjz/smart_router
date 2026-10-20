@@ -1,6 +1,6 @@
 # Smart Router v5.2 - AI 模型智能路由代理 · 中转站
 
-**当前版本：v5.2.1**（2026-10-19）· 仓库：https://github.com/66wjz/smart_router
+**当前版本：v5.2.2**（2026-10-20）· 仓库：https://github.com/66wjz/smart_router
 
 基于 FastAPI + Vue3 + SQLite 的轻量级 AI 模型网关：既是**智能路由器**（按请求内容自动选模型），也是**中转站**（统一 Key/分组/协议，直连透传已配置模型）。提供 3×3 协议矩阵、延迟探测、故障转移、Key 池、多分组权限、智能重试等企业级能力。
 

@@ -54,7 +54,10 @@ class _UsageTracker:
         self.total_tokens = 0
         self.estimated = False
         self.usage_seen = False
-        self.injected_usage = False  # True=中转站主动注入 stream_options（末 chunk 需剥离）
+        # True=中转站主动替客户端注入了 stream_options.include_usage。
+        # 注意：仅用于说明该 usage chunk 是「我们要求才有的」，**不参与**是否剥离的
+        # 决策——剥离与否只看客户端的原始意图（CH-039）。
+        self.injected_usage = False
         self.upstream_model: str | None = None  # 上游真实模型名（异名聚合时与请求名不同）
         # CH-038：缓存 token 与尝试次数
         self.cache_read_tokens = 0
@@ -62,6 +65,8 @@ class _UsageTracker:
         self.attempt_count = 1
         # 流式输出文本累计（估算降级用）
         self._stream_text_len = 0
+        # CH-040：流式过程中收到的错误包摘要（非空表示本次流实际失败）
+        self.stream_error: str | None = None
 
     def note_first_token(self) -> None:
         if self.first_token_ms is None:
@@ -78,6 +83,8 @@ class _UsageTracker:
         try:
             data = json.loads(payload)
         except Exception:
+            return
+        if not isinstance(data, dict):
             return
         usage = data.get("usage")
         if isinstance(usage, dict) and usage:
@@ -103,6 +110,15 @@ class _UsageTracker:
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if isinstance(reasoning, str):
                 self._stream_text_len += len(reasoning)
+        # CH-040：流式过程中出现「错误包」也算失败（首行错误由适配器拦截重试，
+        # 这里覆盖首行之后才报错的情况——此时响应头已发给客户端，无法再切源）
+        if self.stream_error is None and data.get("error") and not choices:
+            err = data.get("error")
+            if isinstance(err, dict):
+                parts = [str(x) for x in (err.get("message"), err.get("code")) if x]
+                self.stream_error = (" | ".join(parts) or "上游流式返回错误包")[:300]
+            else:
+                self.stream_error = str(err)[:300]
 
     def finish_success_non_stream(self, data: dict) -> None:
         """非流式成功：从响应 JSON 取 usage，缺失时估算，并落库"""
@@ -149,13 +165,19 @@ class _UsageTracker:
         self._log("error", http_status, error_msg)
 
     def finalize_stream(self) -> None:
-        """流式结束：无上游 usage 时按输出字符估算 completion"""
+        """流式结束：无上游 usage 时按输出字符估算 completion
+
+        CH-040：若流中收到过错误包，按失败记账（否则成功率虚高、详情也进不去）
+        """
         if not self.usage_seen:
             self.estimated = True
             if not self.prompt_tokens:
                 self._estimate_prompt_only()
             self.completion_tokens = estimate_tokens_by_chars("x" * self._stream_text_len)
             self.total_tokens = self.prompt_tokens + self.completion_tokens
+        if self.stream_error:
+            self._log("error", 200, self.stream_error)
+            return
         self._log("success", 200, None)
 
     def _estimate(self) -> None:
@@ -343,8 +365,15 @@ class RouterService:
     async def _forward(self, candidates: list[dict], body: dict, is_stream: bool,
                        max_attempts: int, response_timeout: float,
                        first_chunk_timeout: float, tracker: _UsageTracker | None = None,
-                       protocol: str = "chat") -> JSONResponse | StreamingResponse:
-        """按候选顺序转发，失败自动换下一个"""
+                       protocol: str = "chat",
+                       client_wants_usage: bool = False) -> JSONResponse | StreamingResponse:
+        """按候选顺序转发，失败自动换下一个
+
+        client_wants_usage：客户端是否**原本**就在请求里要求了
+        stream_options.include_usage。必须与「中转站是否主动注入」区分开——
+        注入只是在客户端没要求时替它开，不能反过来用它决定要不要把 usage
+        chunk 发给客户端（CH-039）。
+        """
         tried = []
         for i in range(max_attempts):
             cand = candidates[i]
@@ -392,7 +421,8 @@ class RouterService:
                 if tracker is not None:
                     tracker.set_hit_upstream(upstream_id, model)
                     if is_stream:
-                        result = self._wrap_stream_with_usage(result, tracker, tracker.injected_usage)
+                        # CH-039：传客户端的真实意图，而不是「是否注入过」
+                        result = self._wrap_stream_with_usage(result, tracker, client_wants_usage)
                     else:
                         result = self._log_non_stream(result, tracker)
                 return result
@@ -483,20 +513,23 @@ class RouterService:
         first_chunk_timeout = retry_cfg.get("first_chunk_timeout", 6)
 
         tracker: _UsageTracker | None = None
+        # CH-039：先记录客户端的原始意图 —— 注入只能在没要求时替它开，
+        # 不能把「注入过」当成「客户端要 usage」用（两者语义相反）
+        client_wants_usage = bool((body.get("stream_options") or {}).get("include_usage"))
         if self.usage_buffer is not None:
             tracker = _UsageTracker(self.config, original_model, protocol, bool(is_stream), body)
             # openai 兼容直通流式：提前注入 include_usage（适配器透传 body 时生效）
             if is_stream:
                 final_fmt = self.config.get_model_protocol(
                     candidates[0].get("upstream", self.config.default_upstream), candidates[0]["model"])
-                if final_fmt == "openai" and not (body.get("stream_options") or {}).get("include_usage"):
+                if final_fmt == "openai" and not client_wants_usage:
                     body["stream_options"] = {"include_usage": True}
                     tracker.injected_usage = True
 
         try:
             return await self._forward(
                 candidates, body, is_stream, max_attempts, response_timeout, first_chunk_timeout,
-                tracker, protocol,
+                tracker, protocol, client_wants_usage,
             )
         except HTTPException:
             raise
