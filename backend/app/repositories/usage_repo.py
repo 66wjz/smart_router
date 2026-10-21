@@ -216,7 +216,8 @@ class UsageRepository(BaseRepository):
             f"SELECT COUNT(*) AS total, "
             f"SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, "
             f"COALESCE(SUM(total_tokens), 0) AS total_tokens, "
-            f"COUNT(DISTINCT CASE WHEN api_key_id IS NOT NULL THEN api_key_id END) AS active_keys "
+            f"COUNT(DISTINCT CASE WHEN api_key_id IS NOT NULL THEN api_key_id END) AS active_keys, "
+            f"SUM(CASE WHEN error_msg LIKE '【已过滤】%' THEN 1 ELSE 0 END) AS filtered_count "
             f"FROM {self.TABLE} WHERE {cond}",
             params,
         ) or {}
@@ -234,6 +235,8 @@ class UsageRepository(BaseRepository):
             "success_rate": round(success / total, 4) if total else None,
             "total_tokens": row.get("total_tokens", 0) or 0,
             "active_keys": row.get("active_keys", 0) or 0,
+            # CH-041：被过滤引擎拦截的请求数（这些请求没有发往任何上游）
+            "filtered_count": row.get("filtered_count", 0) or 0,
             "top_errors": [{"target": r["target"], "count": r["cnt"]} for r in err_rows],
         }
 
@@ -390,6 +393,9 @@ class UsageRepository(BaseRepository):
             where.append("status = 'success'")
         elif status == "error":
             where.append("status != 'success'")
+        elif status == "filtered":
+            # CH-041：被请求过滤引擎拦截的记录（error_msg 带【已过滤】前缀）
+            where.append("error_msg LIKE '【已过滤】%'")
         where_sql = " AND ".join(where)
         total = (self.query_one(f"SELECT COUNT(*) AS c FROM {self.TABLE} WHERE {where_sql}", tuple(params)) or {}).get("c", 0)
         rows = self.query(

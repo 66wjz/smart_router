@@ -242,6 +242,31 @@ class _UsageTracker:
         if upstream_model:
             self.upstream_model = upstream_model
 
+    def note_filtered(self, filtered: list[dict]) -> None:
+        """CH-041：把「被规则过滤的候选」写进尝试链
+
+        与 _note_attempt 的区别：这些候选**根本没有发出请求**，
+        所以 http_status 记 None，error 里写明命中的规则名。
+        """
+        from app.core.usage import current_attempts
+
+        try:
+            items = current_attempts.get()
+            if items is None:
+                items = []
+                current_attempts.set(items)
+            for item in filtered or []:
+                rules = "、".join(item.get("rules") or [])
+                items.append({
+                    "upstream": item.get("upstream"),
+                    "model": item.get("model"),
+                    "http_status": None,
+                    "ms": 0,
+                    "error": f"被过滤规则拦截（未发送）: {rules}"[:300],
+                })
+        except Exception:
+            pass
+
 
 class RouterService:
     def __init__(self, config: AppConfig, probe: LatencyProbe, health: ModelHealth,
@@ -327,7 +352,9 @@ class RouterService:
         if self.config.log_routing:
             detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in candidates)
             log.info(f"直接转发: {model_name} → 候选 {len(candidates)} 个 [{detail}]")
-        return candidates, "direct"
+        # CH-041：static 聚合虽然走本分支，但语义是「聚合门面」——
+        # 多个成员之间可互相替代，命中过滤规则时应静默换成员而非报错。
+        return candidates, ("static_agg" if is_static_agg else "direct")
 
     def _check_aggregation_group(self, agg_name: str, key_groups: set[str] | None) -> None:
         """聚合级权限校验（CH-034）
@@ -361,6 +388,72 @@ class RouterService:
     # ------------------------------------------------------------
     # 转发 + 重试
     # ------------------------------------------------------------
+
+    def _apply_filter(self, candidates: list[dict], body: dict, route_mode: str,
+                      original_model: str,
+                      tracker: "_UsageTracker | None" = None) -> list[dict]:
+        """CH-041：转发前按规则过滤候选
+
+        返回值直接替换原 candidates，调用方无需关心过滤细节。
+
+        三分支语义（用户已确认）：
+          - 聚合（aggregated）：静默跳过命中的成员，用剩余成员继续；全被过滤则 503
+          - 直连/别名（direct/pointer）：命中即 400，不换源（用户明确指定了这个模型）
+          - 未命中 / 引擎关闭 / 规则为空：原样返回，零影响
+        """
+        from app.core.filter_engine import describe_filtered, has_reject
+
+        try:
+            kept, filtered = self.config.apply_filter_rules(candidates, body)
+        except Exception as e:
+            # 过滤器自身异常绝不能影响正常转发：降级为不过滤并告警
+            log.warning(f"[filter] 过滤计算异常，本次跳过过滤: {e}")
+            return candidates
+
+        if not filtered:
+            return candidates
+
+        summary = describe_filtered(filtered)
+        # 聚合语义：rule 聚合（aggregated）与 static 聚合门面（static_agg）
+        # 都允许成员间互相替代；direct/pointer 是用户明确指定的单一目标，不可偷偷换源。
+        is_aggregate = route_mode in ("aggregated", "static_agg")
+
+        if is_aggregate and kept and not has_reject(filtered):
+            # 聚合：静默切换，客户端无感
+            log.info(f"[filter] 聚合 {original_model} 跳过被过滤成员: {summary}，"
+                     f"剩余候选 {len(kept)} 个")
+            if tracker is not None:
+                # 只在尝试链里留痕，不标记为失败（最终结果由后续候选决定）
+                tracker.note_filtered(filtered)
+            return kept
+
+        if is_aggregate and kept and has_reject(filtered):
+            reason = "请求命中过滤规则（reject），已阻止发送"
+            log.warning(f"[filter] {original_model} {reason}: {summary}")
+            self._record_filtered(tracker, filtered, reason, 400)
+            raise HTTPException(status_code=400, detail=f"{reason}：{summary}")
+
+        if is_aggregate:
+            log.warning(f"[filter] 聚合 {original_model} 全部候选被过滤: {summary}")
+            msg = f"所有模型均不可用（全部候选被过滤规则拦截）：{summary}"
+            self._record_filtered(tracker, filtered, msg, 503)
+            raise HTTPException(status_code=503, detail=msg)
+
+        # 直连 / 别名：用户明确指定了这个模型，不偷偷换源，直接告知
+        log.warning(f"[filter] 直连模型 {original_model} 命中过滤规则，已阻止发送: {summary}")
+        msg = (f"请求命中过滤规则，已阻止发送到上游：{summary}。"
+               f"该限制用于避免触发上游渠道的客户端黑名单。")
+        self._record_filtered(tracker, filtered, msg, 400)
+        raise HTTPException(status_code=400, detail=msg)
+
+    @staticmethod
+    def _record_filtered(tracker: "_UsageTracker | None", filtered: list[dict],
+                         reason: str, http_status: int) -> None:
+        """把「被过滤」记进用量表（error_msg 带【已过滤】前缀，供用量页筛选）"""
+        if tracker is None:
+            return
+        tracker.note_filtered(filtered)
+        tracker.finish_error(f"【已过滤】{reason}", http_status)
 
     async def _forward(self, candidates: list[dict], body: dict, is_stream: bool,
                        max_attempts: int, response_timeout: float,
@@ -503,7 +596,7 @@ class RouterService:
         original_model = body.get("model", "")
         is_stream = body.get("stream", False)
 
-        candidates, _ = self._resolve_candidates(original_model, body, key_groups)
+        candidates, route_mode = self._resolve_candidates(original_model, body, key_groups)
         if not candidates:
             raise HTTPException(status_code=503, detail="无可用模型")
 
@@ -525,6 +618,9 @@ class RouterService:
                 if final_fmt == "openai" and not client_wants_usage:
                     body["stream_options"] = {"include_usage": True}
                     tracker.injected_usage = True
+
+        # CH-041：转发前过滤（放在 tracker 之后，命中时才能正确记入用量表）
+        candidates = self._apply_filter(candidates, body, route_mode, original_model, tracker)
 
         try:
             return await self._forward(

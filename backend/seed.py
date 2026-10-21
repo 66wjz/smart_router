@@ -34,6 +34,7 @@ SQL_FILES = (
     "increment/09_增量_20261018_聚合分组.sql",
     "increment/10_增量_20261018_自动聚合开关默认关闭.sql",
     "increment/11_增量_20261019_请求详情可观测性.sql",
+    "increment/12_增量_20261021_请求过滤引擎.sql",
 )
 
 
@@ -46,6 +47,7 @@ def drop_all(conn: sqlite3.Connection) -> None:
         # 增量
         "up_upstream_key", "log_usage", "agg_model_group",
         "agg_probe_config", "agg_probe_template", "agg_unified", "log_usage_detail",
+        "filter_rule",
     ]
     for t in tables:
         conn.execute(f"DROP TABLE IF EXISTS {t}")

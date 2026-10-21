@@ -115,6 +115,7 @@ const sidebarGroups = [
   {
     label: '',
     items: [
+      { key: 'filter-rules', label: '请求过滤', icon: 'shield', path: '/filter-rules' },
       { key: 'settings', label: '系统设置', icon: 'settings', path: '/settings' },
     ],
   },

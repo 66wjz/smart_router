@@ -1,10 +1,10 @@
 # Smart Router API 契约
 
 > 创建时间：2026-08-09
-> 状态：已上线（生产运行中，v5.2.1）
+> 状态：已上线（生产运行中，v5.2.3）
 > 关联流程：fullstack-dev-flow stage-2
 > 关联数据库设计：[docs/数据库设计.md](数据库设计.md)
-> 版本：v5.2.1（保持 v4 管理 API 路径不变，兼容前端迁移；变更见第六节变更记录）
+> 版本：v5.2.3（保持 v4 管理 API 路径不变，兼容前端迁移；变更见第六节变更记录）
 
 ---
 
@@ -660,10 +660,11 @@ Header: `Authorization: Bearer <token>`
 
 ```json
 { "total": 128, "success_count": 125, "success_rate": 0.9766, "total_tokens": 456789, "active_keys": 3,
+  "filtered_count": 4,
   "top_errors": [{ "target": "dsh/deepseek-v4-flash", "count": 2 }] }
 ```
 
-- **说明**: `success_rate` 在无请求时为 `null`；`top_errors` 取错误数 Top5
+- **说明**: `success_rate` 在无请求时为 `null`；`top_errors` 取错误数 Top5；`filtered_count` 为被请求过滤引擎拦截的请求数（CH-041，这些请求未发往任何上游）
 
 ### 4.28 用量按模型聚合（CH-019）
 
@@ -698,9 +699,10 @@ Header: `Authorization: Bearer <token>`
 
 ### 4.30 用量明细（CH-019 / CH-038）
 
-- **路径**: `GET /admin/api/usage/logs?range=today|7d|30d&page=1&size=50&key_id=&model=&status=success|error`
+- **路径**: `GET /admin/api/usage/logs?range=today|7d|30d&page=1&size=50&key_id=&model=&status=success|error|filtered`
 - **出参**: `{ "total": 128, "page": 1, "size": 50, "items": [ ...log_usage 行... ] }`（按 id 倒序）
 - **CH-038 增量**: 每行补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（旧库缺列时给 0 / 0 / 1）。**只增不改**，原有字段全部保留。
+- **CH-041 增量**: `status=filtered` 筛选被请求过滤引擎拦截的记录（`error_msg LIKE '【已过滤】%'`）
 
 ### 4.30.1 单条请求详情（CH-038）
 
@@ -795,6 +797,67 @@ Header: `Authorization: Bearer <token>`
 - **路径**: `GET /admin/api/logs/info`
 - **鉴权**: JWT
 - **出参**: `{ "ok": true, "file": "...", "exists": true, "size_bytes": 33819 }`
+
+### 4.34 请求过滤规则（CH-041）
+
+转发前拦截：命中规则的候选**不会发往上游**，避免触发上游渠道按请求内容维护的客户端黑名单。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/api/filter-rules` | 规则列表 + 全局开关状态 |
+| POST | `/admin/api/filter-rules` | 新建规则 |
+| PUT | `/admin/api/filter-rules/{id}` | 更新规则 |
+| DELETE | `/admin/api/filter-rules/{id}` | 删除规则 |
+| PUT | `/admin/api/filter-rules/engine` | 切换全局开关 |
+| POST | `/admin/api/filter-rules/test` | **试跑**：传入请求体，返回会命中哪些规则 |
+
+**GET 出参**:
+
+```json
+{
+  "enabled": false,
+  "rules": [{
+    "id": 1, "name": "DSH 身份声明", "enabled": false,
+    "target": "system_first_line", "pattern": "You are an AI agent powered by DeepSeek Harness",
+    "upstream_ids": [], "action": "skip", "remark": ""
+  }],
+  "targets": ["system_first_line", "system_any", "body_regex"],
+  "actions": ["skip", "reject"]
+}
+```
+
+**新建/更新入参**:
+
+```json
+{ "name": "DSH 身份声明", "enabled": true, "target": "system_first_line",
+  "pattern": "powered by DeepSeek Harness", "upstream_ids": ["buddy"],
+  "action": "skip", "remark": "" }
+```
+
+- **校验**: `name` 非空且唯一；`pattern` 非空；`target ∈ {system_first_line, system_any, body_regex}`；`action ∈ {skip, reject}`
+- **`upstream_ids`**: 空数组 = 作用于**全部上游源**
+- **`engine`**: `{ "enabled": true|false }`，默认 `false`
+- **`test` 入参/出参**:
+
+```json
+// 请求
+{ "body": { "model": "x", "messages": [...] }, "upstream_ids": ["buddy", "trae"] }
+
+// 响应
+{ "engine_enabled": true, "matched": true,
+  "results": [{ "upstream": "buddy", "rules": [{ "id": 1, "name": "DSH 身份声明", "action": "skip" }] }],
+  "enabled_rule_count": 1 }
+```
+
+- **错误码**: 400 重名 / 404 规则不存在
+- **运行时行为**（上游转发层的可观察结果）：
+
+| 场景 | HTTP | 说明 |
+|---|---|---|
+| 聚合候选命中，仍有剩余候选 | 200（正常转发） | 静默跳过命中的成员，客户端无感 |
+| 聚合候选全部命中 | 503 | 消息列明规则名与被过滤的源 |
+| 单模型直连命中 | **400** | 不偷偷换源，消息说明命中规则 |
+| 引擎关闭 / 规则空 / 未命中 | 不变 | 与未启用该功能时完全一致 |
 
 ### 4.6 路由规则列表
 
@@ -1034,6 +1097,7 @@ Header: `Authorization: Bearer <token>`
 | 聚合独立分组（门面权限） | PUT /admin/api/aggregations（`groups`）；GET /admin/api/aggregations（`groups`）；GET /v1/models 按聚合分组过滤 | agg_unified(groups), sys_setting(groups) |
 | 聚合探测与排序配置 | PUT /admin/api/aggregations（probe_* / sort_mode / schedule / template_id）；GET /admin/api/model-groups/probe-configs（兼容） | agg_unified |
 | 探测模板 | GET/POST /admin/api/probe-templates；PUT/DELETE /admin/api/probe-templates/{id} | agg_probe_template |
+| 请求过滤规则 | GET/POST /admin/api/filter-rules；PUT/DELETE /admin/api/filter-rules/{id}；PUT /admin/api/filter-rules/engine；POST /admin/api/filter-rules/test | filter_rule |
 | 探测计划与排班表 | GET /admin/api/probe-plan（兼容 .../model-groups/probe-plan）；GET /admin/api/aggregations/rule-units | agg_unified, agg_probe_template, sys_setting(latency_probe) |
 | 单模型启用/禁用 | PATCH /admin/api/upstreams/{id}/models | up_upstream(models) |
 | 模型顺序重排 | PUT /admin/api/upstreams/{id}/models/order | up_upstream(models) |
@@ -1060,3 +1124,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-10-16 | CH-019：新增 4.7.3 单模型启停、4.7.4 模型重排、4.24~4.26 同名聚合组三端点、4.27~4.31 用量四端点+flush；/v1/models 过滤模型级禁用；503 错误信息带 `model@upstream` | AI+用户 |
 | 2026-10-16 | CH-020：聚合组成员支持异名（`upstreams[].model`）；新增 4.26.1 归一化建议、4.26.2 某源已配置模型两端点；4.24/4.25 补充 `members` 字段说明 | AI |
 | 2026-10-19 | CH-038：新增 4.30.1 单条请求详情（三栏报文 + 尝试链）、4.30.2 详情采集策略 GET/PUT；4.30 列表出参补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（只增不改） | AI |
+| 2026-10-21 | CH-041：新增 4.34 请求过滤规则（CRUD + 全局开关 + 试跑）；4.27 汇总补 `filtered_count`；4.30 明细支持 `status=filtered` 筛选；五列矩阵补「请求过滤规则」行 | AI |

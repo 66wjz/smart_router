@@ -23,6 +23,7 @@ from app.repositories import (
     AggregatedNameRepository,
     AggregationRepository,
     ApiKeyRepository,
+    FilterRuleRepository,
     ModelGroupRepository,
     PointerRepository,
     ProbeConfigRepository,
@@ -58,6 +59,8 @@ class AppConfig(
         self._aggregations: dict[str, dict] = {}
         self._probe_templates: list[dict] = []
         self._settings: dict = {}
+        # CH-041：请求过滤规则（转发前拦截）
+        self._filter_rules: list[dict] = []
         self._repos = {
             "upstream": UpstreamRepository(),
             "upstream_key": UpstreamKeyRepository(),
@@ -70,6 +73,7 @@ class AppConfig(
             "aggregation": AggregationRepository(),
             "probe_template": ProbeTemplateRepository(),
             "setting": SettingRepository(),
+            "filter_rule": FilterRuleRepository(),
         }
         self.key_pool = KeyPool()
         self.load()
@@ -93,6 +97,7 @@ class AppConfig(
                 self._aggregations = self._repos["aggregation"].list_all()
                 self._probe_templates = self._repos["probe_template"].list_all()
                 self._settings = self._repos["setting"].get_all()
+                self._filter_rules = self._repos["filter_rule"].list_all()
                 self._sync_legacy_views()
             except sqlite3.OperationalError:
                 log.warning("数据库表不存在，配置为空（请先执行 seed.py 初始化）")
@@ -101,6 +106,7 @@ class AppConfig(
                 self._aggregated_names, self._settings = [], {}
                 self._model_groups, self._probe_configs = {}, {}
                 self._aggregations, self._probe_templates = {}, []
+                self._filter_rules = []
             self._load_upstream_keys()
             log.info(f"配置已加载: {len(self._upstreams)} 上游源, {len(self._rules)} 规则, "
                      f"{len(self._api_keys)} 密钥, {len(self._pointers)} 别名, "
@@ -172,6 +178,53 @@ class AppConfig(
     def model_pointers(self) -> list[dict]:
         with self._lock:
             return copy.deepcopy(self._pointers)
+
+    # ---------- CH-041：请求过滤 ----------
+
+    @property
+    def filter_rules(self) -> list[dict]:
+        """全部过滤规则（含未启用的；引擎内部自行按 enabled 判断）"""
+        with self._lock:
+            return copy.deepcopy(self._filter_rules)
+
+    @property
+    def filter_engine_enabled(self) -> bool:
+        """全局开关，默认 False —— 保证未显式开启时行为与升级前完全一致"""
+        return bool(self._settings.get("filter_engine_enabled", False))
+
+    def set_filter_engine_enabled(self, enabled: bool) -> None:
+        self._repos["setting"].set("filter_engine_enabled", bool(enabled))
+        with self._lock:
+            self._settings["filter_engine_enabled"] = bool(enabled)
+
+    def list_filter_rules(self) -> list[dict]:
+        return self.filter_rules
+
+    def save_filter_rule(self, data: dict, rule_id: int | None = None) -> int:
+        """新建或更新一条规则，并即时刷新内存缓存"""
+        if rule_id is None:
+            new_id = self._repos["filter_rule"].create(data)
+        else:
+            self._repos["filter_rule"].update(rule_id, data)
+            new_id = rule_id
+        with self._lock:
+            self._filter_rules = self._repos["filter_rule"].list_all()
+        return new_id
+
+    def delete_filter_rule(self, rule_id: int) -> bool:
+        ok = self._repos["filter_rule"].delete(rule_id)
+        if ok:
+            with self._lock:
+                self._filter_rules = self._repos["filter_rule"].list_all()
+        return ok
+
+    def apply_filter_rules(self, candidates: list[dict], body: dict) -> tuple[list[dict], list[dict]]:
+        """按当前规则过滤候选（供路由层调用；引擎关闭时直接原样返回）"""
+        from app.core.filter_engine import filter_candidates
+
+        return filter_candidates(
+            self.filter_rules, candidates, body, self.filter_engine_enabled,
+        )
 
     @property
     def aggregated_names(self) -> set[str]:

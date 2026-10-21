@@ -12,28 +12,40 @@
 
       <!-- 汇总卡片 -->
       <el-row :gutter="16" style="margin-bottom: 16px">
-        <el-col :span="6">
+        <el-col :span="5">
           <BaseCard variant="hoverable">
             <div class="metric-label">请求总数</div>
             <div class="metric-value">{{ summary.total }}</div>
           </BaseCard>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="5">
           <BaseCard variant="hoverable">
             <div class="metric-label">总 Tokens</div>
             <div class="metric-value">{{ formatTokens(summary.total_tokens) }}</div>
           </BaseCard>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="5">
           <BaseCard variant="hoverable">
             <div class="metric-label">成功率</div>
             <div class="metric-value" :style="{ color: rateColor }">{{ summary.success_rate === null ? '—' : (summary.success_rate * 100).toFixed(1) + '%' }}</div>
           </BaseCard>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="5">
           <BaseCard variant="hoverable">
             <div class="metric-label">活跃 Key</div>
             <div class="metric-value">{{ summary.active_keys }}</div>
+          </BaseCard>
+        </el-col>
+        <!-- CH-041：被请求过滤引擎拦截的请求（未发往任何上游，不消耗号池） -->
+        <el-col :span="4">
+          <BaseCard variant="hoverable">
+            <div class="metric-label">
+              已过滤
+              <el-tooltip content="命中过滤规则、未发往上游的请求。这些请求不消耗号池额度，也不会计入上游违规。" placement="top">
+                <span class="fe-tip">?</span>
+              </el-tooltip>
+            </div>
+            <div class="metric-value" :style="summary.filtered_count ? 'color: var(--accent-amber)' : ''">{{ summary.filtered_count || 0 }}</div>
           </BaseCard>
         </el-col>
       </el-row>
@@ -121,6 +133,7 @@
           <el-option label="全部状态" value="" />
           <el-option label="成功" value="success" />
           <el-option label="失败" value="error" />
+          <el-option label="已过滤" value="filtered" />
         </el-select>
         <el-input v-model="logModel" size="small" placeholder="按模型名过滤…" style="width: 220px" clearable @change="loadLogs" />
       </div>
@@ -143,7 +156,12 @@
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <BaseBadge :variant="row.status === 'success' ? 'green' : (row.http_status === 499 ? 'amber' : 'red')">
+            <!-- CH-041：被过滤引擎拦截（未发往上游），与普通失败区分开 -->
+            <BaseBadge
+              v-if="(row.error_msg || '').startsWith('【已过滤】')"
+              variant="amber"
+            >已过滤</BaseBadge>
+            <BaseBadge v-else :variant="row.status === 'success' ? 'green' : (row.http_status === 499 ? 'amber' : 'red')">
               {{ row.status === 'success' ? '成功' : (row.http_status === 499 ? '断开' : '失败') }}
             </BaseBadge>
           </template>
@@ -288,6 +306,21 @@ onMounted(load)
   font-size: 1.6rem;
   font-weight: 700;
   margin-top: 4px;
+}
+/* CH-041：已过滤卡片的说明图标 */
+.fe-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fill-light, #f2f3f5);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  cursor: help;
+  margin-left: 4px;
+  vertical-align: middle;
 }
 .error-top {
   margin-bottom: 8px;

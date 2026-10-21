@@ -1,6 +1,6 @@
 [project]
 name = "smart-router"
-version = "5.2.2"
+version = "5.2.3"
 description = "AI 模型智能路由代理 - v5 重构版"
 requires-python = ">=3.10"
 dependencies = [

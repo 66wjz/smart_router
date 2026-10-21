@@ -68,6 +68,12 @@ const router = createRouter({
           meta: { title: '用量统计', icon: 'DataAnalysis' },
         },
         {
+          path: 'filter-rules',
+          name: 'FilterRules',
+          component: () => import('@/views/FilterRules.vue'),
+          meta: { title: '请求过滤', icon: 'Shield' },
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('@/views/Settings.vue'),

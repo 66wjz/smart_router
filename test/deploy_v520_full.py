@@ -82,6 +82,7 @@ MIGRATE_FILES = (
     "sql/increment/09_增量_20261018_聚合分组.sql",
     "sql/increment/10_增量_20261018_自动聚合开关默认关闭.sql",
     "sql/increment/11_增量_20261019_请求详情可观测性.sql",
+    "sql/increment/12_增量_20261021_请求过滤引擎.sql",
 )
 
 # 远端执行迁移的助手脚本：逐条执行、容忍 duplicate column、其余错误立即报错退出
@@ -190,8 +191,20 @@ else:
     usage_ok = False
     print("usage-detail:", st2, body2.strip()[:80])
 
+# CH-041：过滤规则表 + 全局开关（默认必须关闭）+ 两条预置规则
+filter_table = "filter_rule" in tabs
+f_st, f_body = http("GET", "/admin/api/filter-rules", token=token)
+f_engine, f_names = None, []
+if f_st == 200:
+    fj = json.loads(f_body)
+    f_engine = fj.get("enabled")
+    f_names = [r.get("name") for r in fj.get("rules", [])]
+print("filter-rules:", f_st, "engine_enabled:", f_engine, "rules:", f_names)
+filter_ok = (filter_table and f_st == 200 and f_engine is False
+             and "DSH 身份声明" in f_names and "Claude Code 身份声明" in f_names)
+
 ok = (st == 200 and auto_off and not auto_found and has_groups and not missing
-      and detail_table and new_cols and usage_ok)
+      and detail_table and new_cols and usage_ok and filter_ok)
 print("SMOKE_OK" if ok else "SMOKE_FAIL")
 '''
 
