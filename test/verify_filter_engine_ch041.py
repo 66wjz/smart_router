@@ -212,6 +212,10 @@ def main() -> int:
             "upstream_ids": upstream_ids or [], "action": action, "remark": "",
         }
 
+    # 预置规则快照：后面用例会反复改写同一条规则（换作用源），
+    # 必须在这里先抓下来，否则用例 [11] 断言的是被改脏的状态。
+    preset_snapshot = {r["name"]: dict(r) for r in config.list_filter_rules()}
+
     # ---------- 1. 引擎关闭（默认）：零影响 ----------
     print("\n[1] 引擎关闭（默认）→ 行为与改动前完全一致")
     MockUpstream.hits.clear()
@@ -394,12 +398,17 @@ def main() -> int:
     check(MockUpstream.hits == ["src_a"], f"正常发出请求（实际 {MockUpstream.hits}）")
 
     # ---------- 预置规则检查 ----------
-    print("\n[11] 增量 SQL 预置的两条规则存在且默认关闭")
-    names = {r["name"]: r for r in config.list_filter_rules()}
-    check("DSH 身份声明" in names, "预置「DSH 身份声明」")
-    check("Claude Code 身份声明" in names, "预置「Claude Code 身份声明」")
-    preset = names.get("Claude Code 身份声明") or {}
+    print("\n[11] 增量 SQL 预置的两条规则存在、默认关闭、作用源已限定")
+    check("DSH 身份声明" in preset_snapshot, "预置「DSH 身份声明」")
+    check("Claude Code 身份声明" in preset_snapshot, "预置「Claude Code 身份声明」")
+    preset = preset_snapshot.get("Claude Code 身份声明") or {}
     check(preset.get("enabled") is False, "预置规则默认不启用（安全默认）")
+    # 回归保障：作用源留空 = 全部源，会把 trae 等放行渠道一起拦掉，
+    # 导致聚合候选被清空后返回 503，而非设计的「静默换成员」。
+    for nm in ("DSH 身份声明", "Claude Code 身份声明"):
+        scope = (preset_snapshot.get(nm) or {}).get("upstream_ids")
+        check(scope == ["buddy", "workbuddy"],
+              f"{nm} 作用源限定为 buddy/workbuddy（实际 {scope}）")
 
     server.shutdown()
     shutil.rmtree(tmpdir, ignore_errors=True)

@@ -93,6 +93,16 @@ npm run dev                   # 开发服务器
 npm run build                 # 产出 dist（后端生产模式直接托管）
 ```
 
+> **数据库结构以 `seed.py` 的执行结果为准。**
+>
+> `sql/01_建表.sql` 只是 **v5 初版基线**，之后每轮迭代都通过 `sql/increment/*.sql` 增量补列补表。
+> 因此**不要单独读 `01_建表.sql` 来判断当前表结构**——它缺 `up_upstream_key` 表、`up_upstream` 的
+> `enabled/models/smart_retry/groups` 四列、`agg_unified` 及其 `rule_bindings/groups` 两列、
+> `filter_rule` 表等。想看清完整结构，直接跑 `seed.py` 后 `PRAGMA table_info(...)`。
+>
+> `seed.py` 已按依赖顺序串起全部 15 个脚本，**一条命令即可得到与生产一致的最新结构**，
+> 不必手动逐个执行；增量脚本按「老库升级路径」的价值保留，不删除。
+
 ### 演示环境（假数据，不碰正式配置）
 
 想先看看聚合模型/探测配置长什么样，可以用独立演示库跑一套假数据：

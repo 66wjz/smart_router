@@ -22,6 +22,13 @@
 - 收尾：文档同步 10 份（需求规格 功能点 9.7 / 架构设计 / 数据库设计 3.11.2 / API契约 / 接口文档 / 系统核心流程 / 功能清单 2.10.6 + D045~D048 / 五列矩阵 / README 能力表与后台清单 / _changes 台账）；版本号统一 **v5.2.3**（README / main.py / pyproject / package.json / run.py）；`git checkout` 还原被 uv 重写的 `backend/uv.lock`（仅源地址噪音，无依赖变更）
 - **部署上线**（用户指示「先部署，再提交代码」）：`deploy_v520_full.py` 9 步全过，备份 `/opt/smart-router/backup/20261021-105506`；增量 12 `APPLIED ok=5`（`filter_rule` 表 + 索引 + 全局开关 false + 2 条预置规则）；`COMPILE_OK`；重启后 `配置已加载: 12 上游源, 3 规则, 6 密钥, 1 别名, 12 聚合`、`Smart Router v5.2.3`；`SMOKE_OK`
 - 顺带把冒烟脚本升级：新增 CH-041 校验（`filter_rule` 表存在、`GET /admin/api/filter-rules` 200、`enabled=false`、两条预置规则在列），失败即 `SMOKE_FAIL`
+- **上线后自查发现配置错误并修正**（用户授权引擎后试跑）：
+  - 试跑真实生产聚合，发现 **9 个启用中的聚合全部被拦空 → 客户端会拿 503**，与设计的「静默换成员」相反
+  - 根因：拦截**按渠道**生效。实测仅 `buddy` / `workbuddy` 拦 DSH/Claude Code 身份声明，`trae` / `loomy` / `lobsterai` 放行；预置规则 `upstream_ids=NULL`（全部源），把放行渠道一起拦掉了
+  - 取证：`log_usage` 里 buddy 5398 次全成功（本机已禁开场白，首行是 `You are a coding agent powered by ...`）、workbuddy 3 次全失败（`request illegal`）；运行日志无 DSH 黑名单记录，确认是「别人没禁用开场白才会踩」
+  - 修正：生产走管理端 API 把两条规则作用源改为 `["buddy","workbuddy"]`，复验 7/9 聚合恢复切换、`hy3`/`hy4-preview` 本身只有这两个成员仍 503（真实情况）
+  - 同步仓库：增量 12 默认值改为 `'["buddy","workbuddy"]'` + 注释说明为何不能留空；验证脚本用例 11 增加作用源断言（顺带修掉测试自身污染——用例 2/6 会改写同条规则，改为先抓快照）；43 项复跑全通过
+- 用户 2026-10-21 决策：作用源**只配 buddy + workbuddy**，其他渠道等发现后再自行添加；数据库初始化选 **B 方案**（保持增量脚本，只在 README 写明「结构以 seed.py 为准」）
 
 ### 2026-10-21 - v5.2.2 全量部署上线 10.10.0.2（用户提供 SSH 凭据授权）
 - 授权链：用户上次会话末「只提交推送」→ 本次直接给出 `root / <密码> / 22` 端口 → 判定为授权部署
