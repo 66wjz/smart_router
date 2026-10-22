@@ -5,6 +5,156 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-22 - v5.2.4 收尾（文档同步 + 脱敏 + 提交）
+- 触发：用户「先加载 skill，然后按照流程对现在的这些改动进行收尾。然后脱敏，之后提交到仓库，这次先不部署了」
+- 路径判定：STATE 全阶段 done + 维护迭代中 → **维护迭代模式**（无门禁，复用 A/B 线分类）
+- 文档影响核对（10 项逐项过）：受影响 4 项 —— README（版本号 + 三行能力）、架构设计（CH-042~048 期间已同步）、API契约、接口文档；其余 6 项确认不受影响
+- **本次抓到一处真实漏同步**：CH-042 新增的 `GET/POST /admin/api/export/{dataset}` + `GET /export/datasets` 三个端点与 10 个数据集，当时只改了架构设计，**API 契约与接口文档完全没登记**。已补齐（4.24 / 3.15），内容逐项对照 `export.py` 实际实现（数据集清单、筛选参数、错误码 404/400、响应头、两条设计理由）
+- 脱敏（`rules/git-usage.md` 步骤 1）：275 个文件扫 `sk-*`/`nvapi-*`/`tp-*`/`ghp_*`/`AKIA*`/PEM 头 → 0 命中；`git ls-files` 查 `.db`/`.env`/`config.yaml`/`*_pass`/`.tmp_*` → 0 命中；用仓库外密码文件真实值反查全仓 → 未出现。结论：无需额外脱敏
+- 收尾：STATE（版本 v5.2.4 + 最后更新 + v5.2.4 行）、feedback-log（FB-041 修正 + 新增 FB-042）、变更记录（收尾条目含 10 项核对表 + 脱敏结论）
+- 提交：用户选择合并为一个 commit（含 CH-042~048 列表统一化 + v5.2.4 部署运维 + 双栈修正）
+- 未部署（用户明确「这次先不部署了」）
+
+### 2026-10-22 - v5.2.4 部署上线（先清用量日志再部署）
+- 触发：用户「先别急提交，先更新服务器的版本」；首次全量部署因生产库 11G 备份过重被用户中断，指示「把用量日志先清空了部署」
+- 定位：生产 `backend/smart_router.db` = 11GB（WAL 10MB），部署第 1 步整库在线备份要额外 11GB、耗时不可控
+- 实施：①停服 → `DELETE FROM log_usage_detail`（502s）+ `DELETE FROM log_usage`（0.2s）→ `VACUUM`（10.14GB → 204KB）→ 启服；②删除中断部署留下的 8.7G 半截备份，磁盘 52G → 34G；③版本号统一 v5.2.4（main.py 2 处 / run.py / pyproject.toml / package.json / README），`npm run build` 重建 dist；④`deploy_v520_full.py` 9 步全过
+- 清理后校验：`integrity_check=ok`、`freelist_count=0`；12 上游 / 6 Key / 3 规则 / 12 聚合 / 1 模板 / 2 过滤规则 / 16 设置全在，日志两表 0 行
+- 部署结果：备份 `/opt/smart-router/backup/20261022-223013`（880K）；`Smart Router v5.2.4 启动`、配置已加载 12/3/6/1/12；`/`、`/health`、登录 200，无 Key 401；`openapi` version=5.2.4；监听 `0.0.0.0:10002`；`/admin/api/export/datasets` 200
+- 冒烟：`SMOKE_FAIL` 唯一原因是脚本断言「过滤引擎必须默认关闭」，而生产引擎是用户主动开启 → 已把该断言改为「只校验表/端点/预置规则，开关值仅打印」
+- **双栈修正（承接 FB-041）**：按用户选择先补 `host="::"`，上线后 IPv4 立刻全断（127.0.0.1 / 10.10.0.2 均 000，`ss` 只有 `[::]:10002`）→ 立即回滚为 0.0.0.0 恢复。取证：生产 Python 3.12 `asyncio.create_server("::")` 的 `IPV6_V6ONLY = 1`（系统 `net.ipv6.bindv6only=0` 无用），证明 FB-041 原「Linux 默认双栈」判断错误。改为显式双栈 socket（`socket.create_server(..., family=AF_INET6, dualstack_ipv6=True)` + `Server.run(sockets=[sock])`），本地最小 ASGI 离线验证 `v6only=0` 且 IPv4/IPv6 双 200 后才上线；结果 `ss` 显示 `*:10002`，三路健康检查全 200
+- **纠错留痕**：部署前我把 `run.py` 的 `host="::"` 误判为「与本轮无关的改动」并建议还原，用户据此选择 0.0.0.0。事后发现它是 FB-041 已登记变更，服务器侧本就「随手册 A5b 部署」尚未上线；已向用户说明并按选择补回（含上述修正）
+- 收尾：`docs/变更记录.md` 追加本次部署 + 日志清理记录，并更正 FB-041 的双栈判断
+- 备注：停服清理期间网关不可用约 8.5 分钟（大表 DELETE 耗时），期间所有客户端请求会失败；双栈尝试导致的 IPv4 中断约 40 秒
+- 未提交、未推送（用户明确「先别急提交」）
+
+### 2026-10-22 - FB-041 中转站双栈监听改造（B 线-小，1 行，配 WireGuard 直连架构）
+- 背景：用户提出 WireGuard IPv6 直连改造（云中继流量几天 100+G），并要求中转站支持公网 IPv6/域名访问
+- 实测确认：10002 仅监听 0.0.0.0（IPv6 curl HTTP 000）→ 根因 run.py `host="0.0.0.0"`
+- 实施：run.py `host="::"`（Linux 双栈）；配套 ufw 放行 10002/tcp + ddns-go AAAA 域名一箭双雕（同条记录服务 WG :51820 与 API :10002）都固化在《WireGuard直连改造-Ubuntu侧执行手册》（A5b/A6/阶段 C），服务器侧由 Ubuntu AI 随手册执行
+- **2026-10-22 修正**：`host="::"` 并不是双栈（Python 3.12 asyncio 置 `IPV6_V6ONLY=1`，只监听 IPv6）→ 已改为显式双栈 socket 并上线，见本文件顶部 v5.2.4 部署记录
+- 边界决策：团队 KPI(8000) 不开公网（默认弱口令 + 工作数据）；10002 公网暴露前置条件 = admin 强密码 + 换 sk-CHANGE-ME 系列 Key
+- 涉及项目仓库改动仅 run.py 1 行，已记 feedback-log FB-041 / 变更记录
+
+### 2026-10-22 - CH-048 分组管理改为弹窗编辑（B 线-小，纯前端）
+- 触发：用户验收 CH-047 时说「这一版改的很完美了，稍微改一个地方」—— 分组管理要和上游源一样，条目是展示的、点右侧「修改」才弹窗，添加分组也弹窗填写
+- 分类（铁律 7）：功能正常、只是形态不对 → **B 线（设计调整）**，先写 `docs/_changes/CH-048` 再改代码
+- 用户拍板（AskUserQuestion）：**即时保存，去掉「保存分组」按钮**
+- 定位（铁律 2）：CH-047 把分组管理换成 `ListPage` 后，两列仍是 `BaseInput`、新增是 push 空行、靠「保存分组」兜底 → 看着只读、实际可编辑，与上游源形态不一致
+- 实施（只改 `Settings.vue`，后端零改动）：①列改纯文本 + 描述空值显示 `—`；②操作列改「修改 / 删除」；③右上「+ 添加分组」→ `openGroupAdd`；④新增/修改共用 `groupModal` + `BaseModal` + `BaseModalFooter`；⑤`commitGroups()` 统一提交（成功/失败都 `load()` 回真值）；⑥删掉 `groupsForm` / `savingGroups` / `handleSaveGroups` / `removeGroup` / `addGroup` 等死代码；⑦补空名与重名校验；⑧删掉 `commitGroups` 里的 `ElMessage.error`，避免与 `request.ts` 拦截器重复弹
+- 中途失误：替换时把 `addGroup`/`removeGroupRow`/`handleSaveGroups` 复制成了三份，已用整段替换清理干净（教训：SearchReplace 的 `old_str` 取太短会定位到相邻重复块）
+- 验证（浏览器逐项）：表格内 0 个输入框；新增弹窗「添加分组 / 分组名 / 描述 / 取消·确定添加」；重名「分组「free」已存在」且弹窗不关；新增/修改/删除均即时生效；删除被引用的 `free` 弹出后端 400 文案；空名提示；取消可关闭；测试数据 `ch048-test` 已清理，分页回到「共 2 条」；`npm run build` 通过（Settings 15.13 kB）
+- 文档同步：新增 `_changes/CH-048`；`_changes/README` 登记；`变更记录.md`；`STATE.md`（CH-047 标注 + CH-048 新行）；`feedback-log.md`（FB-040）；`架构设计.md`（6.7 规范一取消「+ 添加分组在表格下方」的例外）；本日志
+- 服务：全程保持运行（端口 10002）
+
+### 2026-10-22 - CH-047 列表批量操作与筛选补齐（B 线-中，纯前端）
+- 触发：用户验收 CH-046 后指出五点 —— ①模型别名批量操作不全 ②探测模板/探测单元明细没对齐 API Key ③用量统计除明细外其他没对齐 ④请求过滤批量操作不全 ⑤系统设置的分组管理没改好
+- 分类（铁律 7）：补齐既有组件用法，无后端/DB 变更 → **B 线-中**
+- 用户拍板（AskUserQuestion）：只读表只补「筛选 + 导出」；模型别名加批量删除、请求过滤加批量启停删、探测模板加批量删除+导出、分组管理改成标准列表
+- 实施（按页一次只改一处）：
+  - `Pointers.vue`：批量删除（逐条容错，删除后 `reloadConfig` + 重算页码 + 与最新列表求交集）
+  - `FilterRules.vue`：批量启用/停用/删除（`updateFilterRule` 顺序执行，失败即中断并报后端 detail）
+  - `TemplatePanel.vue`：补全选 + 批量删除（走父组件 `emit('remove')`，因单删已在父级处理）+ `dataset="probe-templates"` 导出
+  - `ProbePlanPanel.vue`：接 `dataset="probe-units"` 导出
+  - `Usage.vue`：三张汇总表各加关键字筛选（模型名 / 上游名+模型 / Key 名+ID），筛选后全选只作用于筛选结果
+  - `Upstreams.vue`：补名称/ID/URL + 分组 + 状态三组筛选（原只有未接线的 `filters`）
+  - `Aggregated.vue`：聚合模型补「聚合名 / 类型 / 状态」三组筛选 + `resetAggFilter`
+  - `Settings.vue`：分组管理改标准列表（`ListPage` + `DataTable` + `ListToolbar` + 行内删除），**保留「保存分组」按钮**（后端 `updateGroups` 是全量替换语义，不能即时提交），旁加 `BaseHint` 说明
+- 两项自查额外补齐（用户未点名但同属「没对齐」）：上游源筛选、聚合模型筛选
+- 明确不做：探测单元明细的筛选 —— 数据随 plan 一次性返回（单次规模有限），加前端筛选属过度设计
+- 验证：`npm run build` 通过（Settings 14.07 / Upstreams 30.56 / Usage 24.04 / Aggregated 60.32 / FilterRules 15.01 / Pointers 9.75 kB）；浏览器逐页实测 —— 模型别名「全选 共 0 条 批量删除 批量导出 导出」+ 空态仍有分页、请求过滤勾 1 行「已选 1 项 取消选择 批量启用 批量停用 批量删除 批量导出」、上游源搜 `xiaomi` → 共 1 条剩 1 张卡、聚合页 3 组筛选 + 模板工具条 + 单元「共 6 条 导出」、分组管理「共 2 条」列表化且保存按钮在
+- 文档同步：新增 `_changes/CH-047`；`_changes/README` 登记；`变更记录.md`；`STATE.md`（CH-046 标注 + CH-047 新行）；`feedback-log.md`（FB-038 标注 + FB-039）；本日志
+- 服务：全程保持运行（端口 10002，预览库 `.tmp_preview/preview.db`）
+
+### 2026-10-22 - CH-046 全站列表统一收口（B 线-中，纯前端）
+- 触发：用户「先查一下还有哪些列表显示没统一用组件，以 API Key 管理为标杆」，点名最近请求明细缺多选批量、模型别名空态无分页、用量三表没换组件
+- 分类（铁律 7）：组件缺陷修复 + 六处迁移，无后端/DB 变更 → **B 线-中**
+- 体检（先分析后动手）：15 处列表分四类 —— 已达标 6 / 功能不齐 4（用量四表）/ 形态不对 2（探测模板、探测单元）/ 口径不一 2（别名、过滤）+ 组件缺陷 1（`ListPage` 的 `total > 0`）
+- 用户拍板：三批一起做；单条维护类「加多选但只给批量导出」
+- 实施：①`ListPage` 去掉 `total > 0`；②`Usage.vue` 三张汇总表拆独立 `ListPage`（各自分页/全选/批量导出），明细独立成 `ListPage` 并加多选与批量导出；③`TemplatePanel.vue` / `ProbePlanPanel.vue` 改 `ListPage`+`DataTable`+`ListToolbar`+`RowActions`；④`Pointers.vue` / `FilterRules.vue` 加 `selectable`+全选+批量导出
+- 明确不动：分组管理（行内编辑）、已配置模型（卡片内子表）、路由规则候选表（嵌套只读子表）
+- 验证：`npm run build` 通过；浏览器逐页 —— 模型别名空态 0 条仍显示「共 0 条 20 条/页 1 前往 页」（原缺陷已修）、请求过滤勾 2 行「已选 2 项」、用量页 4 标题+4 工具条+4 独立分页、探测模板 0 条有分页、探测单元 6 条有分页
+- 文档同步：新增 `_changes/CH-046`；`_changes/README`；`变更记录.md`；`STATE.md`；`feedback-log.md`（FB-038）；`架构设计.md`（6.6.1 补空态分页说明）
+- 服务：全程保持运行（端口 10002）
+
+### 2026-10-22 - CH-045 列表工具条全选 + 上游源/聚合模型发现统一（B 线-中，纯前端）
+- 触发：用户「缺了快捷全选的按钮，像 API Key 管理那样有个按一下全选的框；上游源列表、疑似同一模型（改名叫聚合模型发现）也照这个组件换上」
+- 分类（铁律 7）：组件能力补齐 + 两处列表统一，无后端/DB 变更 → **B 线-中**
+- 定位：卡片条目没有 `el-table` 表头 → 表头全选框丢失；上游源仍是 `BaseSection` + 裸 `v-for`，无统一工具条/分页/批量
+- 方案取舍（铁律 6 设计前对齐）：`ListPage` 不知道条目结构、`EntityCard` 是被选对象 → 全选放 `ListToolbar` 左侧（本就持有 count/total）
+- 实施：①`ListToolbar` 加 `selectable`/`allChecked`/`indeterminate` + `toggle-all`，只作用于当前页（并集/差集）、带半选态、竖线分隔；②`Upstreams.vue` 改 `ListPage` + 跨页选中 + 批量启用/禁用/删除（删除走 confirmDanger 提示路由候选失效）；③`UpstreamCard.vue` 加 `selectable`/`checked` 透传 `EntityCard`，内部 `ModelList` 原样保留；④`Aggregated.vue` 「疑似同一模型（建议合并）」→「聚合模型发现」+ 改 `ListPage`（`pagination=false`）+ 聚合列表接全选
+- 未动：API Key 页是 `el-table`，已有表头全选，无需改
+- 验证：`npm run build` 通过；上游源 10 卡 + 全选后「已选 10 项」10 张全勾 + 底部「共 12 条 10 条/页 1 2」；聚合页全选后「已选 5 项」；区块标题已改名；截图确认视觉
+- 文档同步：新增 `_changes/CH-045`；`_changes/README`；`变更记录.md`；`STATE.md`（并修正行序为 CH-044→CH-045）；`feedback-log.md`（FB-037）；`架构设计.md`（6.6.1 工具条职责 + 6.6.2 关键取舍 5）
+- 服务：全程保持运行（端口 10002）
+
+### 2026-10-22 - CH-044 聚合模型列表化 + 卡片内分页修正（B 线-中，纯前端）
+- 触发：用户验收 CH-043 时指出两处偏差 —— ①仪表盘右边高、左边应补到同高（否则露灰底）；②聚合模型本身就是一个列表，分页应在列表右下角而不是卡片内，批量操作在右上角；并补充「没有拖拽也行，你自己分析需不需要留」
+- 分类（铁律 7）：结构调整 + 交互修正，无后端/DB 变更 → **B 线-中**
+- 定位（铁律 3 先定位再改）：①`.two-col` 的 `align-items: start` 是 CH-043 我改反的；②分页被做进了 `ChipFlow` 内部；核查组件能力发现 `DataTable` 只能渲染表格行，但 `ListPage` 默认插槽本就支持卡片条目（源码注释已写明），**是没用对不是组件不行**
+- 实施：①聚合组区块改 `ListPage`（标题+右上批量 / `ListToolbar` 常驻 / 卡片条目 / 底部 `TablePagination`）；②`ChipFlow` 加 `pager` 开关、默认 false 平铺；③`EntityCard` 加 `selectable`/`checked` + `update:checked`，勾选框挂标题行最左，`.ec-title` 加 `flex:1` 把操作区推到最右；④选中按聚合名存（不存行对象），跨页保持、批量启停后保留、批量移除逐条容错 + 与最新列表求交集；⑤**移除前端 Sortable 拖拽**（含 `.drag-handle` / `.drag-ghost` 样式与手柄节点、`reorderAggregations` 导入），保留后端 `PUT /aggregations/order`；⑥`.two-col` 改 `stretch`，`.trend-card` 纵向 flex、`.chart-wrap`/`.trend-svg` 撑满
+- 拖拽取舍分析（用户让我自己判断）：去掉。理由 —— 纯展示顺序不参与路由决策、与分页冲突易误解为全局排序、展示型列表通用形态是筛选+表头排序
+- 验证：`npm run build` 通过；浏览器实测 —— 卡片内 `.cf-pager` 0 个、列表底部「共 5 条 10 条/页」、造到 13 条时出现 `1 2` 页且跨页选中保持（第 1 页勾 1 项→翻第 2 页→仍「已选 1 项」→翻回勾选还在）、批量关闭后 2 项仍勾选、`.drag-handle` 0 个、仪表盘左右两栏均 372px 且图表实际 259px
+- 数据修正：发现趋势图不渲染的根因是 `log_usage.ts` 存 unix 时间戳而验收数据写成了字符串，改正后 7 天趋势正常
+- 清理：临时聚合 `ch044-demo-*` 8 个已删除；`ch043-big`/`ch043-small` 保留作验收样例
+- 文档同步：新增 `_changes/CH-044`；`_changes/README` 登记 + 标注 CH-043 已被修正；`变更记录.md`；`STATE.md`；`feedback-log.md`（FB-036 + FB-035 补注）；`架构设计.md`（6.6.2 关键取舍 1 修正 + 新增取舍 4、6.7 规范六撤销拖拽）
+- 服务：全程保持运行（端口 10002）
+
+### 2026-10-22 - CH-043 卡片壳与成员流统一 + 批量选中保持（B 线-中，纯前端）
+- 触发：用户三点反馈「①批量操作后选中状态丢了 ②仪表盘东西一多撑变形 ③聚合模型/疑似同一模型/上游源其实是同一种列表，却各维护一套组件」
+- 分类（铁律 7）：抽二级组件 + 交互修正，无后端/DB 变更 → **B 线-中**
+- 设计前对齐（铁律 6）：体检出卡片外壳 6 份、只读 chips 流 4 份、chip 样式 4 套；给出三档方案，用户拍板 **路线 A**（ChipFlow + EntityCard，不做 DataTable 展开行），并明确「成员超出做成和列表组件一样的分页」
+- 实施（一次只改一处）：①新增 `base/ChipFlow.vue`（每页 10、序号跨页连续、首「首选」末「兜底」、≤pageSize 不渲染分页条）；②新增 `base/EntityCard.vue`（五插槽）；③`list/DataTable.vue` selection 列加 `reserve-selection` + 新增 `setSelection(keys)`；④`views/ApiKeys.vue` 批量启停保留选中、批量删除逐条容错 + 与最新列表求交集；⑤`AggregationCard`/`Aggregated`/`Dashboard`/`UpstreamCard` 换壳换流；⑥`dashboard.css` 改 `align-items:start` + `.share-list` 限高 320px
+- 读代码确认（铁律 3/4）：先读 `ApiKeys.vue` 批量逻辑与 `DataTable.vue` expose，确认「父组件清空数组不同步表格勾选态」，因此必须显式调 `setSelection`
+- 验证：`npm run build` 通过；浏览器逐项实测 —— 批量禁用后 3 行仍勾选、批量删除后复选框 `[false,false]` 无幽灵、12 成员聚合第 2 页序号 11/12 连续且末个「兜底」、12 上游时 `.share-list` 320/727 内部滚动且左栏仍 137px 未被拉长
+- 清理：验证造的 12 个测试上游 / 36 条测试用量 / 临时聚合 `ch043-demo` / 两源临时模型全部删除
+- 文档同步：`_changes/CH-043`（补 5.1 实测表）/ `_changes/README` / `变更记录.md` / `STATE.md` / `feedback-log.md`（FB-035）/ `架构设计.md`（新增 6.6.2 + 目录树 + 变更表）
+- 遗留：第二档（探测模板 / 探测单元 / 分组管理）与第三档（上游源 / 聚合 / 规则卡片 / 仪表盘）待用户指示
+- 服务：全程保持运行（端口 10002），未中途停止
+
+### 2026-10-21 - CH-042 列表页二级组件（B 线-大，样例阶段）
+- 触发：用户「前端整体乱糟糟，列表各做各的样式，缺列表这种二级组件；先做样例看效果，不要把我原来的东西直接干掉」
+- 分类（铁律 7）：新增组件层 + 新页面，纯前端 → **B 线-大**
+- 先分析后动手（用户要求「先分析，不要操作」）：体检 13 处列表，量化 7 个不一致维度 + 3 条根因（封装对象错 / 缺组合契约 / 约定靠文档不靠组件）
+- 用户拍板三项：DataTable 走 **A（包 el-table）**、分页默认开、**先做样例页**
+- 写变更文档 `docs/_changes/CH-042-列表页二级组件.md`（含 2.1 用户约束：不推翻现有设计）
+- 实现 `components/list/` 七组件：ListPage / DataTable / FilterBar+FilterField / ListToolbar / TablePagination / StatCard / RowActions（+ types.ts / index.ts）
+- 实现样例页 `views/DesignPreview.vue`，四形态：标准列表 / 批量操作 / 指标+列表 / 卡片列表
+- 路由 `/design-preview` + 侧边栏入口（标注「验收后可移除」）
+- 两处编译错误并修正：①`rateTone` 字符串字面量类型过宽 → 显式断言联合类型；②`avg_duration_ms` 列对象换行错位
+- 验证：`npm run build` 通过（DesignPreview 21.2 kB）；本地起服务（临时库 `.tmp_preview`）浏览器实测四种形态全部正常，勾选后批量工具条正确出现（已选 12 项），控制台仅登录页遗留无障碍提示、无运行时报错
+- **未动现有 13 处列表 / UpstreamCard / AggregationCard / Dashboard / BasePagination / 后端**（用户明确要求）
+- 清理临时库；文档同步：架构设计 6.6.1 + 目录树 + 变更记录、docs/变更记录、_changes/README、feedback-log（FB-034）
+- 未提交未部署，**待用户看效果确认**
+
+### 2026-10-21 - CH-042 第二轮：工具条常驻 + 后端 xlsx 导出
+- 用户反馈：只有「批量操作」符合想法；工具条要常驻、配色改灰不要蓝；加「导出」按钮（xlsx），无批量操作的列表也要能导出
+- 用户确认三项规格：导出=全部、批量导出=选中项、格式 **xlsx**（后续要提取骨架做模板，要求做完善）
+- **关键约束识别**：生产部署脚本 `deploy_v520_full.py` 只同步代码不装依赖 → **不能加 openpyxl**，改用标准库 `zipfile` 手写 xlsx
+- 后端新增 `core/xlsx_writer.py`（6 个 part 最小 OOXML）+ `api/admin/export.py`（GET 全部 / POST 批量 / datasets 清单 / 10 个数据集）
+- 踩坑：`styles.xml` 漏 `<cellStyles>` → openpyxl 警告「no default style」，部分 Excel 提示文件损坏；补上后 openpyxl 反向校验 13 项全过
+- 路由顺序坑：`/export/datasets` 必须声明在 `/export/{dataset}` 之前，否则被通配吃掉
+- 前端 `api/export.ts` 用**独立 axios 实例**（共享实例的响应拦截器 `return response.data` 会丢掉 `Content-Disposition`，拿不到中文文件名）
+- `ListToolbar` 重做：常驻、灰底（`--bg-elevated`）、左侧未选中显示「共 N 条 · 已启用 X 个」、内建「导出」与「批量导出（N）」
+- `DataTable` 暴露 `clearSelection()`（父组件清数组不会同步 el-table 内部勾选态）
+- 验证：`verify_export_ch042.py` **31 项全通过**、`npm run build` 通过、浏览器实测点「导出」→ 200 + PK zip + `API Key_20261021-2058.xlsx`
+- 文档同步：CH-042 变更文档（4.4 重做 / 4.5 导出 / 5.1 文件清单 / 六、验收）、docs/变更记录
+- 仍未动现有 13 处列表；**待用户看效果后改「第一档 5 处」**
+
+### 2026-10-21 - CH-042 第三轮：工具条定稿 + 第一档 5 处迁移
+- 用户四条调整：①批量导出与导出交换位置 ②去掉两者间分割线 ③批量导出不显示条数 ④批量按钮常显、未选中置灰禁用
+- `ListToolbar` 重构：新增 `actions: RowActionItem[]` 配置驱动（不再靠 `v-if`），未选中统一 `disabled`；按钮顺序 `批量操作 → 批量导出 → 导出`；删除 `.lt-divider`
+- 迁移第一档 5 处：
+  - `Pointers.vue`：筛选 + 常驻工具条 + DataTable + 分页 + RowActions
+  - `FilterRules.vue`：新增三组筛选 + 工具条 + 分页；全局开关移到 `#notice`
+  - `ApiKeys.vue`：筛选 + 多选 + 批量启停/删除 + 批量导出；操作列 4 项改 RowActions
+  - `Usage.vue`：StatCard 指标卡 + 3 张汇总表各配工具条 + 明细换 FilterBar/TablePagination（保留行点击详情）
+- 后端 `export.py` 补筛选参数支持（pointers/api-keys/filter-rules/usage-*），保证「导出 = 你看到的这批」
+- 踩坑：`BaseInput` 不支持 `clearable` 属性，已移除
+- 验证：`npm run build` 通过、`compileall` 通过、31 项导出测试全过、浏览器逐页实测（pointers/api-keys/usage/filter-rules）渲染正常且控制台无运行时报错、筛选后导出 200 + PK zip
+- 文档同步：CH-042 变更文档（4.6 工具条定稿 / 4.7 迁移清单）、docs/变更记录
+- **第二档 / 第三档未动**（用户尚未指示）
+
 ### 2026-10-21 - CH-041 请求过滤引擎（B 线-大，走 stage-1→5 迷你流程）
 - 触发：用户提问「别人一直用 DSH 调 buddy，号池会不会封号？能不能配置过滤，命中就不发给 buddy，并回执提示」
 - 分类（铁律 7）：新增模块 + 新数据链路 + 前端页 → **B 线-大**

@@ -1,22 +1,79 @@
 <template>
-  <BaseSection variant="card" title="上游源列表">
-    <template #actions>
-      <BaseButton variant="primary" size="sm" @click="openAdd">+ 添加上游源</BaseButton>
-    </template>
+  <div>
+    <!--
+      CH-045：上游源列表与聚合模型统一走 ListPage
+      （标题 + 右上操作 → 常驻工具条 + 全选 → 卡片条目 → 底部统一分页）
+    -->
+    <ListPage
+      title="上游源列表"
+      :loading="loading"
+      :page="page"
+      :page-size="pageSize"
+      :total="filtered.length"
+      :page-sizes="[10, 20, 50]"
+      @update:page="page = $event"
+      @update:page-size="pageSize = $event"
+    >
+      <template #actions>
+        <BaseButton variant="primary" size="sm" @click="openAdd">+ 添加上游源</BaseButton>
+      </template>
 
-    <div v-loading="loading">
-      <BaseEmptyState v-if="!upstreams.length && !loading" description="暂无上游源，请点击上方按钮添加" />
-      <UpstreamCard
-        v-for="u in upstreams"
-        :key="u.id"
-        :u="u"
-        :toggling="togglingIds.includes(u.id)"
-        @toggle="(v: boolean) => handleToggle(u, v)"
-        @edit="openEdit(u)"
-        @delete="handleDelete(u)"
-        @manual-add="openManualModal(u)"
-      />
-    </div>
+      <template #filters>
+        <FilterBar :loading="loading" @search="applyFilter" @reset="resetFilter">
+          <FilterField label="名称 / ID / URL" :width="280">
+            <BaseInput
+              v-model="filters.keyword"
+              size="sm"
+              placeholder="输入关键字搜索"
+              @keydown.enter="applyFilter"
+            />
+          </FilterField>
+          <FilterField label="分组" :width="160">
+            <el-select v-model="filters.group" size="small" clearable placeholder="全部分组">
+              <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
+            </el-select>
+          </FilterField>
+          <FilterField label="状态" :width="130">
+            <el-select v-model="filters.enabled" size="small" clearable placeholder="全部">
+              <el-option label="启用" :value="true" />
+              <el-option label="禁用" :value="false" />
+            </el-select>
+          </FilterField>
+        </FilterBar>
+      </template>
+
+      <template #toolbar>
+        <ListToolbar
+          :count="selected.length"
+          :total="filtered.length"
+          :summary="`已启用 ${enabledCount} 个`"
+          :actions="batchActions"
+          selectable
+          :all-checked="allPageChecked"
+          :indeterminate="pageIndeterminate"
+          @toggle-all="toggleAllOnPage"
+          @clear="clearSelection"
+        />
+      </template>
+
+      <BaseEmptyState v-if="!filtered.length && !loading" description="暂无上游源，请点击上方按钮添加" />
+
+      <div v-else class="up-list">
+        <UpstreamCard
+          v-for="u in paged"
+          :key="u.id"
+          :u="u"
+          :toggling="togglingIds.includes(u.id)"
+          selectable
+          :checked="selected.includes(u.id)"
+          @update:checked="(v: boolean) => toggleChecked(u.id, v)"
+          @toggle="(v: boolean) => handleToggle(u, v)"
+          @edit="openEdit(u)"
+          @delete="handleDelete(u)"
+          @manual-add="openManualModal(u)"
+        />
+      </div>
+    </ListPage>
 
     <!-- 新增 / 修改上游源（共用表单） -->
     <UpstreamFormModal
@@ -44,17 +101,20 @@
           @cancel="manualModal.visible = false" @confirm="confirmManualAdd" />
       </template>
     </BaseModal>
-  </BaseSection>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, provide, reactive, ref } from 'vue'
+import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import BaseSection from '@/components/base/BaseSection.vue'
+import ListPage from '@/components/list/ListPage.vue'
+import ListToolbar from '@/components/list/ListToolbar.vue'
+import FilterBar from '@/components/list/FilterBar.vue'
+import FilterField from '@/components/list/FilterField.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
@@ -72,6 +132,136 @@ const upstreams = ref<any[]>([])
 const loading = ref(false)
 const groupOptions = ref<{ name: string; description: string }[]>([])
 const togglingIds = ref<string[]>([])
+
+// ---------- 筛选（CH-047：与 API Key 页对齐） ----------
+const filters = reactive({ keyword: '', group: '', enabled: '' as '' | boolean })
+const applied = reactive({ keyword: '', group: '', enabled: '' as '' | boolean })
+
+const filtered = computed(() => {
+  return upstreams.value.filter((u) => {
+    if (applied.keyword) {
+      const k = applied.keyword.toLowerCase()
+      const hit = String(u.name || '').toLowerCase().includes(k)
+        || String(u.id || '').toLowerCase().includes(k)
+        || String(u.base_url || '').toLowerCase().includes(k)
+      if (!hit) return false
+    }
+    if (applied.group) {
+      const gs: string[] = u.groups && u.groups.length ? u.groups : [u.group || 'free']
+      if (!gs.includes(applied.group)) return false
+    }
+    if (applied.enabled !== '' && Boolean(u.enabled) !== applied.enabled) return false
+    return true
+  })
+})
+
+function applyFilter() {
+  applied.keyword = filters.keyword.trim()
+  applied.group = filters.group
+  applied.enabled = filters.enabled
+  page.value = 1
+}
+
+function resetFilter() {
+  filters.keyword = ''
+  filters.group = ''
+  filters.enabled = ''
+  applyFilter()
+}
+
+const page = ref(1)
+const pageSize = ref(10)
+const paged = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
+const enabledCount = computed(() => upstreams.value.filter((u) => u.enabled).length)
+
+// ---------- 多选（CH-045） ----------
+/** 选中按 upstream_id 存，跨页保持 */
+const selected = ref<string[]>([])
+
+function toggleChecked(id: string, checked: boolean) {
+  if (checked) {
+    if (!selected.value.includes(id)) selected.value.push(id)
+  } else {
+    selected.value = selected.value.filter((x) => x !== id)
+  }
+}
+
+function clearSelection() {
+  selected.value = []
+}
+
+const pageIds = computed(() => paged.value.map((u) => u.id))
+const allPageChecked = computed(() =>
+  pageIds.value.length > 0 && pageIds.value.every((id) => selected.value.includes(id)),
+)
+const pageIndeterminate = computed(() => {
+  const hit = pageIds.value.filter((id) => selected.value.includes(id)).length
+  return hit > 0 && hit < pageIds.value.length
+})
+
+function toggleAllOnPage(checked: boolean) {
+  if (checked) {
+    selected.value = [...new Set([...selected.value, ...pageIds.value])]
+  } else {
+    const drop = new Set(pageIds.value)
+    selected.value = selected.value.filter((id) => !drop.has(id))
+  }
+}
+
+/** 批量启用/禁用：操作后保留选中 */
+async function batchToggle(enabled: boolean) {
+  const ids = [...selected.value]
+  if (!ids.length) return
+  const verb = enabled ? '启用' : '禁用'
+  try {
+    for (const id of ids) {
+      await updateUpstream(id, { enabled })
+    }
+    ElMessage.success(`已${verb} ${ids.length} 个上游源`)
+    await reloadConfig()
+    await load()
+    if ((page.value - 1) * pageSize.value >= filtered.value.length) page.value = 1
+    const alive = new Set(upstreams.value.map((u) => u.id))
+    selected.value = ids.filter((id) => alive.has(id))
+  } catch {
+    ElMessage.error(`批量${verb}失败`)
+  }
+}
+
+/** 批量删除：逐条容错 + 与最新列表求交集，杜绝幽灵选中 */
+async function batchDelete() {
+  const ids = [...selected.value]
+  if (!ids.length) return
+  if (!await confirmDanger(`确定删除选中的 ${ids.length} 个上游源吗？`, '删除后引用它们的路由候选将失效。')) return
+
+  const failed: string[] = []
+  for (const id of ids) {
+    try {
+      await deleteUpstream(id)
+    } catch {
+      failed.push(id)
+    }
+  }
+
+  const removed = ids.length - failed.length
+  if (removed > 0) ElMessage.success(`已删除 ${removed} 个上游源`)
+  if (failed.length) ElMessage.warning(`${failed.length} 个上游源删除失败，已保留选中`)
+
+  await reloadConfig()
+  await load()
+  if ((page.value - 1) * pageSize.value >= filtered.value.length) page.value = 1
+  const alive = new Set(upstreams.value.map((u) => u.id))
+  selected.value = failed.filter((id) => alive.has(id))
+}
+
+const batchActions = computed(() => [
+  { label: '批量启用', onClick: () => batchToggle(true) },
+  { label: '批量禁用', onClick: () => batchToggle(false) },
+  { label: '批量删除', variant: 'danger' as const, onClick: () => batchDelete() },
+])
 
 // ---------- 新增/修改表单 ----------
 const formVisible = ref(false)

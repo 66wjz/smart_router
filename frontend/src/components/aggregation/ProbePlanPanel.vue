@@ -103,50 +103,75 @@
       </el-form>
     </BaseSection>
 
-    <BaseSection variant="card" title="探测单元明细" style="margin-top: 16px">
-      <el-table :data="plan.units" size="small" stripe>
-        <el-table-column prop="upstream_name" label="上游源" width="130" />
-        <el-table-column prop="model" label="真实模型名" min-width="200" show-overflow-tooltip />
-        <el-table-column label="引用聚合" min-width="200">
-          <template #default="{ row }">
-            <BaseBadge v-for="g in row.groups" :key="g"
-              :variant="row.group_kinds[g] === 'rule' ? 'purple' : 'blue'" style="margin-right: 4px">
-              {{ g }}
-            </BaseBadge>
-            <span v-if="!row.groups.length" class="muted">仅规则/别名</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="间隔" width="80">
-          <template #default="{ row }">{{ row.interval }}s</template>
-        </el-table-column>
-        <el-table-column label="最近延迟" width="90">
-          <template #default="{ row }">{{ row.latency != null ? `${row.latency}s` : 'N/A' }}</template>
-        </el-table-column>
-        <el-table-column label="最近探测" width="160">
-          <template #default="{ row }">{{ fmtTime(row.last_check) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="150">
-          <template #default="{ row }">
-            <BaseBadge :variant="row.status === 'ok' ? 'green' : row.status === 'down' ? 'red' : 'gray'">
-              {{ row.status === 'ok' ? '可用' : row.status === 'down' ? '不可用' : '未知' }}
-            </BaseBadge>
-            <BaseBadge v-if="!row.active_now" variant="amber" style="margin-left: 4px">时段外</BaseBadge>
-            <BaseBadge v-else-if="row.stale" variant="gray" style="margin-left: 4px">数据陈旧</BaseBadge>
-          </template>
-        </el-table-column>
-      </el-table>
-    </BaseSection>
+    <!-- CH-046：与其它列表统一走 ListPage -->
+    <ListPage
+      title="探测单元明细"
+      description="每个「上游源 × 真实模型」是一个探测单元；同一单元被多个聚合引用时只探一次"
+      style="margin-top: 16px"
+      :page="unitPage"
+      :page-size="unitPageSize"
+      :total="plan.units.length"
+      @update:page="unitPage = $event"
+      @update:page-size="unitPageSize = $event"
+    >
+      <template #toolbar>
+        <ListToolbar :total="plan.units.length" dataset="probe-units" />
+      </template>
+
+      <DataTable
+        :data="pagedUnits"
+        :columns="unitColumns"
+        row-key="key"
+        empty-text="暂无探测单元"
+      >
+        <template #cell-upstream_name="{ row }">{{ row.upstream_name }}</template>
+        <template #cell-model="{ row }"><code class="mono">{{ row.model }}</code></template>
+        <template #cell-groups="{ row }">
+          <BaseBadge v-for="g in row.groups" :key="g"
+            :variant="row.group_kinds[g] === 'rule' ? 'purple' : 'blue'" style="margin-right: 4px">
+            {{ g }}
+          </BaseBadge>
+          <span v-if="!row.groups.length" class="muted">仅规则/别名</span>
+        </template>
+        <template #cell-interval="{ row }">{{ row.interval }}s</template>
+        <template #cell-latency="{ row }">{{ row.latency != null ? `${row.latency}s` : 'N/A' }}</template>
+        <template #cell-last_check="{ row }">{{ fmtTime(row.last_check) }}</template>
+        <template #cell-status="{ row }">
+          <BaseBadge :variant="row.status === 'ok' ? 'green' : row.status === 'down' ? 'red' : 'gray'">
+            {{ row.status === 'ok' ? '可用' : row.status === 'down' ? '不可用' : '未知' }}
+          </BaseBadge>
+          <BaseBadge v-if="!row.active_now" variant="amber" style="margin-left: 4px">时段外</BaseBadge>
+          <BaseBadge v-else-if="row.stale" variant="gray" style="margin-left: 4px">数据陈旧</BaseBadge>
+        </template>
+      </DataTable>
+    </ListPage>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
 import BaseSection from '@/components/base/BaseSection.vue'
+import { ListPage, DataTable, ListToolbar } from '@/components/list'
+import type { DataColumn } from '@/components/list'
 import ProbeScheduleTable from '@/components/probe/ProbeScheduleTable.vue'
 import type { ProbePlan, ProbeSchedule } from '@/api/aggregations'
+
+const unitPage = ref(1)
+const unitPageSize = ref(20)
+
+const unitColumns: DataColumn[] = [
+  { key: 'upstream_name', label: '上游源', width: 130 },
+  { key: 'model', label: '真实模型名', minWidth: 200 },
+  { key: 'groups', label: '引用聚合', minWidth: 200 },
+  { key: 'interval', label: '间隔', width: 80 },
+  { key: 'latency', label: '最近延迟', width: 90 },
+  { key: 'last_check', label: '最近探测', width: 160 },
+  { key: 'status', label: '状态', width: 150 },
+]
 
 const props = defineProps<{
   plan: ProbePlan
@@ -154,6 +179,12 @@ const props = defineProps<{
   schedule: ProbeSchedule
   saving: boolean
 }>()
+
+/** 探测单元按当前页切片（CH-046：分页归列表） */
+const pagedUnits = computed(() => {
+  const start = (unitPage.value - 1) * unitPageSize.value
+  return props.plan.units.slice(start, start + unitPageSize.value)
+})
 
 const emit = defineEmits<{
   'update:form': [value: Record<string, any>]

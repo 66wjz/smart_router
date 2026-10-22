@@ -23,49 +23,10 @@
   color: var(--text-tertiary);
 }
 /* 建议合并 */
-.suggest-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
-  background: var(--bg-base);
-}
-.suggest-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.suggest-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.suggest-members {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.member-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-hover);
-  font-size: 0.78rem;
-}
-.member-chip code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-}
+/* CH-043：卡片外壳改由 EntityCard 统一，成员集合改由 ChipFlow 统一，
+   这里只保留聚合页特有的 .group-model（ChipFlow / EntityCard 内部各自管样式） */
 .group-model {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.95rem;
   font-weight: 600;
-}
-.chip-src {
-  color: var(--text-secondary, var(--text-tertiary));
 }

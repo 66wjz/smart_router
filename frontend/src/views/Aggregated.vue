@@ -7,48 +7,141 @@
           <span class="tab-label">聚合组 <span class="tab-count">{{ aggregations.length }}</span></span>
         </template>
 
-        <BaseSection v-if="suggestions.length" variant="card" title="疑似同一模型（建议合并）">
-          <BaseNotice variant="warning"
-            text="系统按「去前缀 + 忽略大小写 + 忽略 . _ 差异」识别出下列模型可能其实是同一个。确认后会合成一个聚合名，客户端用该名字即可自动跨源兜底。" />
-          <div v-for="s in suggestions" :key="s.normalized" class="suggest-card">
-            <div class="suggest-head">
-              <div class="suggest-title">
-                <BaseBadge variant="amber">建议聚合名</BaseBadge>
-                <code class="group-model">{{ s.suggested_name }}</code>
-                <BaseBadge variant="gray">{{ s.members.length }} 个成员</BaseBadge>
-              </div>
+        <!--
+          CH-045：原「疑似同一模型（建议合并）」改名为「聚合模型发现」，
+          与聚合模型同一个列表骨架：标题 + 右上刷新 + 常驻工具条（全选/批量合并）
+          + 卡片条目 + 底部统一分页。
+        -->
+        <ListPage
+          v-if="suggestions.length"
+          title="聚合模型发现"
+          :page="suggPage"
+          :page-size="suggPageSize"
+          :total="suggestions.length"
+          :page-sizes="[10, 20, 50]"
+          @update:page="suggPage = $event"
+          @update:page-size="suggPageSize = $event"
+        >
+          <template #actions>
+            <BaseButton variant="ghost" size="sm" @click="loadAll">刷新</BaseButton>
+          </template>
+
+          <template #notice>
+            <BaseNotice variant="warning"
+              text="系统按「去前缀 + 忽略大小写 + 忽略 . _ 差异」识别出下列模型可能其实是同一个。确认后会合成一个聚合名，客户端用该名字即可自动跨源兜底。" />
+          </template>
+
+          <template #toolbar>
+            <ListToolbar
+              :count="selectedSuggestions.length"
+              :total="suggestions.length"
+              :actions="suggBatchActions"
+              selectable
+              :all-checked="allSuggChecked"
+              :indeterminate="suggIndeterminate"
+              @toggle-all="toggleAllSuggestions"
+              @clear="clearSuggSelection"
+            />
+          </template>
+
+          <EntityCard
+            v-for="s in pagedSuggestions"
+            :key="s.normalized"
+            selectable
+            :checked="selectedSuggestions.includes(s.normalized)"
+            @update:checked="(v: boolean) => toggleSuggChecked(s.normalized, v)"
+          >
+            <template #title>
+              <BaseBadge variant="amber">建议聚合名</BaseBadge>
+              <code class="group-model">{{ s.suggested_name }}</code>
+              <BaseBadge variant="gray">{{ s.members.length }} 个成员</BaseBadge>
+            </template>
+            <template #actions>
               <BaseButton variant="primary" size="sm" :disabled="merging === s.normalized"
                 @click="mergeSuggestion(s)">
                 {{ merging === s.normalized ? '合并中…' : '一键合并' }}
               </BaseButton>
-            </div>
-            <div class="suggest-members">
-              <span v-for="m in s.members" :key="m.upstream + m.model" class="member-chip">
-                <span class="chip-src">{{ m.upstream_name }}</span>
-                <code>{{ m.model }}</code>
-              </span>
-            </div>
-          </div>
-        </BaseSection>
+            </template>
+            <!-- CH-043：成员集合统一走 ChipFlow（CH-044 起平铺，不在卡片内分页） -->
+            <ChipFlow :items="s.members" />
+          </EntityCard>
+        </ListPage>
 
-        <BaseSection variant="card" title="聚合模型" style="margin-top: 16px">
+        <!--
+          CH-044：聚合模型本质是「条目为卡片的列表」。
+          标题 + 右上操作 + 批量条 + 卡片区 + 分页 由 ListPage 统一承载，
+          分页归列表（页面底部），不再塞进每张卡片内部。
+        -->
+        <ListPage
+          title="聚合模型"
+          style="margin-top: 16px"
+          :page="aggPage"
+          :page-size="aggPageSize"
+          :total="filteredAggs.length"
+          :page-sizes="[10, 20, 50]"
+          @update:page="aggPage = $event"
+          @update:page-size="aggPageSize = $event"
+        >
           <template #actions>
             <BaseButton variant="ghost" size="sm" @click="loadAll">刷新</BaseButton>
             <BaseButton variant="primary" size="sm" @click="openCreate">+ 新建聚合</BaseButton>
           </template>
 
-          <BaseNotice
-            text="两类聚合统一管理：固定成员（可跨源、可异名）由你指定候选；规则聚合的候选由「路由规则」页在运行时按请求内容匹配，探测时会覆盖全部规则候选的并集。" />
+          <template #notice>
+            <BaseNotice
+              text="两类聚合统一管理：固定成员（可跨源、可异名）由你指定候选；规则聚合的候选由「路由规则」页在运行时按请求内容匹配，探测时会覆盖全部规则候选的并集。" />
+          </template>
+
+          <template #filters>
+            <FilterBar @search="aggPage = 1" @reset="resetAggFilter">
+              <FilterField label="聚合名" :width="260">
+                <BaseInput
+                  v-model="aggKeyword"
+                  size="sm"
+                  placeholder="输入聚合名过滤"
+                  @keydown.enter="aggPage = 1"
+                />
+              </FilterField>
+              <FilterField label="类型" :width="140">
+                <el-select v-model="aggKind" size="small" clearable placeholder="全部">
+                  <el-option label="固定成员" value="static" />
+                  <el-option label="规则匹配" value="rule" />
+                </el-select>
+              </FilterField>
+              <FilterField label="状态" :width="130">
+                <el-select v-model="aggEnabled" size="small" clearable placeholder="全部">
+                  <el-option label="启用" :value="true" />
+                  <el-option label="已关闭" :value="false" />
+                </el-select>
+              </FilterField>
+            </FilterBar>
+          </template>
+
+          <template #toolbar>
+            <ListToolbar
+              :count="selectedAggs.length"
+              :total="filteredAggs.length"
+              :summary="`已启用 ${enabledAggCount} 个`"
+              :actions="aggBatchActions"
+              selectable
+              :all-checked="allPageChecked"
+              :indeterminate="pageIndeterminate"
+              @toggle-all="toggleAllOnPage"
+              @clear="clearAggSelection"
+            />
+          </template>
 
           <BaseEmptyState v-if="!aggregations.length" compact
             description="当前没有聚合。同一模型名只存在于一个源时不构成聚合；异名模型可手动创建。" />
 
-          <div v-else ref="aggListRef" class="agg-list">
+          <div v-else class="agg-list">
             <AggregationCard
-              v-for="g in aggregations"
+              v-for="g in pagedAggs"
               :key="g.name"
               :g="g"
               :saving="savingName === g.name"
+              :checked="selectedAggs.includes(g.name)"
+              @update:checked="(v: boolean) => toggleAggChecked(g.name, v)"
               @toggle="(v: boolean) => toggleGroup(g, v)"
               @probe="openProbe(g)"
               @edit="g.kind === 'static' ? openEdit(g) : openEditRuleGroup(g)"
@@ -56,7 +149,7 @@
               @reset="resetGroup(g)"
             />
           </div>
-        </BaseSection>
+        </ListPage>
       </el-tab-pane>
 
       <!-- ==================== 探测模板 ==================== -->
@@ -174,13 +267,18 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onMounted, reactive, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import Sortable from 'sortablejs'
 import BaseSection from '@/components/base/BaseSection.vue'
+import ListPage from '@/components/list/ListPage.vue'
+import ListToolbar from '@/components/list/ListToolbar.vue'
+import FilterBar from '@/components/list/FilterBar.vue'
+import FilterField from '@/components/list/FilterField.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
+import ChipFlow from '@/components/base/ChipFlow.vue'
+import EntityCard from '@/components/base/EntityCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
@@ -202,7 +300,6 @@ import {
   listAggregations,
   listProbeTemplates,
   listRuleUnits,
-  reorderAggregations,
   saveAggregation,
   type Aggregation,
   type ProbePlan,
@@ -229,6 +326,206 @@ const savingName = ref('')
 /** 编辑弹窗独立保存态：不能复用 savingName（初值 '' 会让新建弹窗一开就卡「保存中」） */
 const savingEdit = ref(false)
 const merging = ref('')
+
+// ---------- 聚合模型发现：分页 + 多选 + 批量合并（CH-045） ----------
+const suggPage = ref(1)
+const suggPageSize = ref(10)
+const pagedSuggestions = computed(() => {
+  const start = (suggPage.value - 1) * suggPageSize.value
+  return suggestions.value.slice(start, start + suggPageSize.value)
+})
+
+/** 选中按归一化名存（suggestions 的唯一键），跨页保留 */
+const selectedSuggestions = ref<string[]>([])
+
+function toggleSuggChecked(key: string, checked: boolean) {
+  if (checked) {
+    if (!selectedSuggestions.value.includes(key)) selectedSuggestions.value.push(key)
+  } else {
+    selectedSuggestions.value = selectedSuggestions.value.filter((k) => k !== key)
+  }
+}
+
+function clearSuggSelection() {
+  selectedSuggestions.value = []
+}
+
+const suggPageKeys = computed(() => pagedSuggestions.value.map((s) => s.normalized))
+const allSuggChecked = computed(() =>
+  suggPageKeys.value.length > 0 && suggPageKeys.value.every((k) => selectedSuggestions.value.includes(k)),
+)
+const suggIndeterminate = computed(() => {
+  const hit = suggPageKeys.value.filter((k) => selectedSuggestions.value.includes(k)).length
+  return hit > 0 && hit < suggPageKeys.value.length
+})
+
+function toggleAllSuggestions(checked: boolean) {
+  if (checked) {
+    selectedSuggestions.value = [...new Set([...selectedSuggestions.value, ...suggPageKeys.value])]
+  } else {
+    const drop = new Set(suggPageKeys.value)
+    selectedSuggestions.value = selectedSuggestions.value.filter((k) => !drop.has(k))
+  }
+}
+
+/** 批量合并：逐条容错；全部走 mergeSuggestion 的同一套保存逻辑 */
+async function batchMergeSuggestions() {
+  const keys = [...selectedSuggestions.value]
+  if (!keys.length) return
+  if (!await confirmAction(`确定把选中的 ${keys.length} 个建议合并为聚合吗？`, '批量合并')) return
+
+  const failed: string[] = []
+  for (const key of keys) {
+    const s = suggestions.value.find((x) => x.normalized === key)
+    if (!s) continue
+    try {
+      const members = s.members.map((m: any) => ({ upstream: m.upstream, model: m.model, weight: 1 }))
+      await saveModelGroup(s.suggested_name, members, true)
+    } catch {
+      failed.push(key)
+    }
+  }
+
+  const done = keys.length - failed.length
+  if (done > 0) ElMessage.success(`已合并 ${done} 个聚合`)
+  if (failed.length) ElMessage.warning(`${failed.length} 个合并失败，已保留选中`)
+
+  await reloadConfig()
+  await loadAll()
+  if ((suggPage.value - 1) * suggPageSize.value >= suggestions.value.length) suggPage.value = 1
+
+  const alive = new Set(suggestions.value.map((s) => s.normalized))
+  selectedSuggestions.value = failed.filter((k) => alive.has(k))
+}
+
+const suggBatchActions = computed(() => [
+  { label: '批量合并', onClick: () => batchMergeSuggestions() },
+])
+
+// ---------- 聚合列表：分页 + 多选（CH-044） ----------
+/** 筛选（CH-047：与 API Key 页对齐） */
+const aggKeyword = ref('')
+const aggKind = ref<'' | 'static' | 'rule'>('')
+const aggEnabled = ref<'' | boolean>('')
+
+const filteredAggs = computed(() => {
+  const k = aggKeyword.value.trim().toLowerCase()
+  return aggregations.value.filter((g) => {
+    if (k && !String(g.name || '').toLowerCase().includes(k)) return false
+    if (aggKind.value && g.kind !== aggKind.value) return false
+    if (aggEnabled.value !== '' && Boolean(g.enabled) !== aggEnabled.value) return false
+    return true
+  })
+})
+
+function resetAggFilter() {
+  aggKeyword.value = ''
+  aggKind.value = ''
+  aggEnabled.value = ''
+  aggPage.value = 1
+}
+
+/** 列表级分页：分页归列表，不归卡片 */
+const aggPage = ref(1)
+const aggPageSize = ref(10)
+const pagedAggs = computed(() => {
+  const start = (aggPage.value - 1) * aggPageSize.value
+  return filteredAggs.value.slice(start, start + aggPageSize.value)
+})
+const enabledAggCount = computed(() => aggregations.value.filter((g) => g.enabled).length)
+
+/** 选中集合按聚合名存，跨页也保留（与 API Key 页的 row-key 做法一致） */
+const selectedAggs = ref<string[]>([])
+
+function toggleAggChecked(name: string, checked: boolean) {
+  if (checked) {
+    if (!selectedAggs.value.includes(name)) selectedAggs.value.push(name)
+  } else {
+    selectedAggs.value = selectedAggs.value.filter((n) => n !== name)
+  }
+}
+
+function clearAggSelection() {
+  selectedAggs.value = []
+}
+
+// ---------- 快捷全选（只作用于当前页，语义与表格表头全选一致） ----------
+const pageNames = computed(() => pagedAggs.value.map((g) => g.name))
+const allPageChecked = computed(() =>
+  pageNames.value.length > 0 && pageNames.value.every((n) => selectedAggs.value.includes(n)),
+)
+const pageIndeterminate = computed(() => {
+  const hit = pageNames.value.filter((n) => selectedAggs.value.includes(n)).length
+  return hit > 0 && hit < pageNames.value.length
+})
+
+function toggleAllOnPage(checked: boolean) {
+  if (checked) {
+    // 只追加当前页，不动其它页已勾选的
+    const merged = new Set([...selectedAggs.value, ...pageNames.value])
+    selectedAggs.value = [...merged]
+  } else {
+    const drop = new Set(pageNames.value)
+    selectedAggs.value = selectedAggs.value.filter((n) => !drop.has(n))
+  }
+}
+
+/** 批量启用/禁用：操作后保留选中，避免用户重新勾一遍 */
+async function batchToggleAgg(enabled: boolean) {
+  const names = [...selectedAggs.value]
+  if (!names.length) return
+  const verb = enabled ? '启用' : '关闭'
+  try {
+    for (const name of names) {
+      const g = aggregations.value.find((x) => x.name === name)
+      if (!g) continue
+      await saveAggregation(name, { kind: g.kind, enabled })
+    }
+    ElMessage.success(`已${verb} ${names.length} 个聚合`)
+    await reloadConfig()
+    await loadAll()
+    // 重新拉取后可能超出现有页数，回到第一页兜底
+    if ((aggPage.value - 1) * aggPageSize.value >= aggregations.value.length) aggPage.value = 1
+    // 数据已换新对象，但选中是按名字存的，仍指向存在的项；清掉已消失的
+    const alive = new Set(aggregations.value.map((g) => g.name))
+    selectedAggs.value = names.filter((n) => alive.has(n))
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || `批量${verb}失败`)
+  }
+}
+
+/** 批量移除：逐条容错 + 与最新列表求交集，杜绝幽灵选中 */
+async function batchRemoveAgg() {
+  const names = [...selectedAggs.value]
+  if (!names.length) return
+  if (!await confirmDanger(`确定移除选中的 ${names.length} 个聚合吗？`, '移除后客户端将不能再使用这些聚合名。')) return
+
+  const failed: string[] = []
+  for (const name of names) {
+    try {
+      await deleteAggregation(name)
+    } catch {
+      failed.push(name)
+    }
+  }
+
+  const removed = names.length - failed.length
+  if (removed > 0) ElMessage.success(`已移除 ${removed} 个聚合`)
+  if (failed.length) ElMessage.warning(`${failed.length} 个聚合移除失败，已保留选中`)
+
+  await reloadConfig()
+  await loadAll()
+  if ((aggPage.value - 1) * aggPageSize.value >= aggregations.value.length) aggPage.value = 1
+
+  const alive = new Set(aggregations.value.map((g) => g.name))
+  selectedAggs.value = failed.filter((n) => alive.has(n))
+}
+
+const aggBatchActions = computed(() => [
+  { label: '批量启用', onClick: () => batchToggleAgg(true) },
+  { label: '批量关闭', onClick: () => batchToggleAgg(false) },
+  { label: '批量移除', variant: 'danger' as const, onClick: () => batchRemoveAgg() },
+])
 
 // ---------- 模板 ----------
 const templates = ref<ProbeTemplate[]>([])
@@ -589,58 +886,17 @@ async function saveEdit() {
   }
 }
 
-// ---------- 聚合列表拖拽排序（CH-028） ----------
-const aggListRef = ref<HTMLElement | null>(null)
-let aggSortable: Sortable | null = null
-
-function initAggSortable() {
-  if (!aggListRef.value) return
-  aggSortable?.destroy()
-  aggSortable = Sortable.create(aggListRef.value, {
-    handle: '.drag-handle',
-    animation: 150,
-    ghostClass: 'drag-ghost',
-    fallbackTolerance: 3,
-    onEnd: async (evt) => {
-      if ((evt.oldIndex ?? -1) === (evt.newIndex ?? -1)) return
-      const domOrder = Array.from(aggListRef.value!.querySelectorAll('.group-card'))
-        .map((n) => (n as HTMLElement).dataset.aggName || '')
-        .filter(Boolean)
-      const byName = new Map(aggregations.value.map((g) => [g.name, g]))
-      const next = domOrder.map((n) => byName.get(n)).filter(Boolean) as Aggregation[]
-      if (next.length !== aggregations.value.length) {
-        // DOM 与数据长度不一致（异常情况）：直接回读后端顺序复原
-        await loadAll()
-        return
-      }
-      // 先同步本地数据，避免 Vue 用旧数组回写 DOM
-      aggregations.value = next
-      try {
-        await reorderAggregations(next.map((g) => g.name))
-        ElMessage.success('聚合顺序已保存')
-      } catch (e: any) {
-        ElMessage.error(e?.response?.data?.detail || '排序失败')
-        await loadAll()
-      }
-    },
-  })
-}
-
-watch(
-  () => aggregations.value.length,
-  () => nextTick(initAggSortable),
-)
+// ---------- 聚合列表排序（CH-044：移除前端拖拽） ----------
+// 原 CH-028 的拖拽调序已去掉：
+//   1. 它只决定纯展示顺序（架构设计 6.7 已写明不参与路由决策），去掉无功能损失；
+//   2. 加分页后只能拖「当页」，容易让人误以为能全局排序，歧义大于收益；
+//   3. 展示型列表的通用形态靠筛选/表头排序组织，不靠拖拽。
+// 后端 PUT /admin/api/aggregations/order 保留不动（API 契约不受影响），
+// 顺序仍由库里已有的 aggregation_order 决定。
 
 onMounted(async () => {
   await Promise.all([loadUpstreams(), loadRules()])
   await loadAll()
-  await nextTick()
-  initAggSortable()
-})
-
-onBeforeUnmount(() => {
-  aggSortable?.destroy()
-  aggSortable = null
 })
 </script>
 

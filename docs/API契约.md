@@ -1064,6 +1064,31 @@ Header: `Authorization: Bearer <token>`
 
 - **错误码**: 400 被上游源或 API Key 引用的分组不可删除
 
+### 4.24 数据导出（CH-042）
+
+- **路径**: `GET /admin/api/export/{dataset}`（导出全部，受 query 筛选约束） / `POST /admin/api/export/{dataset}`（批量导出选中项）
+- **鉴权**: JWT
+- **响应**: 二进制 xlsx（`Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`），带 `Content-Disposition`（`filename*` 按 RFC 5987 编码，中文名不乱码）与 `Access-Control-Expose-Headers: Content-Disposition`
+- **数据集清单**: `GET /admin/api/export/datasets`（返回 `{datasets: [...]}`，须声明在 `/export/{dataset}` 之前，否则被通配吃掉）
+
+| dataset | 内容 | 支持的 query 筛选 |
+|---|---|---|
+| `pointers` | 模型别名 | `keyword` / `upstream` |
+| `api-keys` | API Key（导出保留完整 Key） | `keyword` / `group` / `enabled` |
+| `filter-rules` | 请求过滤规则 | `keyword` / `upstream` / `enabled` |
+| `usage-by-model` | 用量-按模型 | `range` |
+| `usage-by-unit` | 用量-按单元 | `range` |
+| `usage-by-key` | 用量-按 Key | `range` |
+| `usage-logs` | 请求明细（分页循环拉取，硬上限 20 万条） | `range` / `model` / `status` |
+| `groups` | 分组 | — |
+| `probe-templates` | 探测模板 | — |
+| `probe-units` | 探测单元 | — |
+
+- **批量导出入参**: `{ "ids": ["..."] }`，ids 为各数据集的主键字符串（`pointers` 用别名、`api-keys` 用名称、`usage-by-unit` 用 `upstream_id|upstream_model` 等）
+- **错误码**: 404 未知数据集 / 400 批量导出未选任何记录
+- **为何用 POST 传 ids**: 批量可能选中上百条，拼 URL 会超长
+- **为何后端生成 xlsx**: 「导出 = 导出全部」，前端只能拿到当前页；且 xlsx 由标准库 `zipfile` 手写 OOXML（`core/xlsx_writer.py`），**不引入 openpyxl**，因为部署脚本只同步代码、不在服务器装依赖
+
 ---
 
 ## 五、需求 → API → 表 对应矩阵
@@ -1125,3 +1150,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-10-16 | CH-020：聚合组成员支持异名（`upstreams[].model`）；新增 4.26.1 归一化建议、4.26.2 某源已配置模型两端点；4.24/4.25 补充 `members` 字段说明 | AI |
 | 2026-10-19 | CH-038：新增 4.30.1 单条请求详情（三栏报文 + 尝试链）、4.30.2 详情采集策略 GET/PUT；4.30 列表出参补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（只增不改） | AI |
 | 2026-10-21 | CH-041：新增 4.34 请求过滤规则（CRUD + 全局开关 + 试跑）；4.27 汇总补 `filtered_count`；4.30 明细支持 `status=filtered` 筛选；五列矩阵补「请求过滤规则」行 | AI |
+| 2026-10-22 | CH-042：新增 4.24 数据导出 `GET/POST /admin/api/export/{dataset}` + `GET /admin/api/export/datasets`（10 个数据集，xlsx 由标准库手写 OOXML，零依赖） | AI |

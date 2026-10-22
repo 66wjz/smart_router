@@ -56,17 +56,18 @@
 
     <!-- ③ 趋势 + 贡献占比 -->
     <div class="two-col">
-      <BaseSection variant="card" title="近 7 天用量趋势">
+      <BaseSection variant="card" title="近 7 天用量趋势" class="trend-card">
         <template #actions>
           <div class="legend">
             <span class="lg-item"><i class="lg-dot dot-req"></i>请求数</span>
             <span class="lg-item"><i class="lg-dot dot-tok"></i>Tokens</span>
           </div>
         </template>
+        <!-- CH-044：右栏变高时左栏卡片跟着撑满，图表吃掉剩余空间（不留灰底空白） -->
         <div v-if="hasTrend" class="chart-wrap">
           <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" preserveAspectRatio="none"
                :width="CHART_W" :height="CHART_H"
-               :style="{ width: '100%', height: '180px' }" class="trend-svg">
+               class="trend-svg">
             <defs>
               <linearGradient id="gReq" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" class="grad-req-start" />
@@ -102,10 +103,11 @@
         <template #actions>
           <span class="axis-hint">按 Tokens · 近 7 天</span>
         </template>
+        <!-- CH-043：上游多时内部滚动，避免把左栏图表撑高 -->
         <div v-if="upstreamUsage.length" class="share-list">
           <div v-for="(u, i) in upstreamUsage" :key="u.upstream_id" class="share-item">
             <div class="share-head">
-              <span class="share-name">
+              <span class="share-name" :title="u.upstream_name || u.upstream_id">
                 <i class="share-dot" :style="{ background: pickColor(i) }"></i>
                 {{ u.upstream_name || u.upstream_id }}
               </span>
@@ -187,15 +189,13 @@
             <BaseBadge v-if="g.probe_schedule_mode === 'window'" variant="amber">{{ g.probe_schedule }}</BaseBadge>
             <BaseBadge variant="default">{{ g.sort_mode === 'latency' ? '速度优先' : '稳定优先' }}</BaseBadge>
           </div>
-          <div class="grp-flow">
-            <template v-for="(m, i) in g.members" :key="m.upstream + m.model">
-              <span class="grp-chip">
-                <span class="chip-src">{{ m.upstream }}</span>
-                <code>{{ m.model }}</code>
-              </span>
-              <span v-if="i < g.members.length - 1" class="grp-arrow">→</span>
-            </template>
-          </div>
+          <ChipFlow
+            v-if="g.members && g.members.length"
+            :items="g.members"
+            :page-size="10"
+            arrow
+          />
+          <span v-else class="muted">无成员</span>
           <div class="grp-foot">
             <span>近 7 天 <b>{{ g.requests_7d }}</b> 次 · <b>{{ formatTokens(g.tokens_7d) }}</b> tokens</span>
           </div>
@@ -224,6 +224,7 @@ import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
+import ChipFlow from '@/components/base/ChipFlow.vue'
 import { getDashboard } from '@/api/common'
 import { listUpstreams } from '@/api/upstreams'
 import { listApiKeys } from '@/api/apiKeys'

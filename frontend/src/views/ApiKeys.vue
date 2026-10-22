@@ -1,52 +1,93 @@
 <template>
-  <BaseSection
-    variant="card"
+  <ListPage
     title="路由层 API Key 管理"
     description="这些 Key 是客户端访问 Smart Router 的入场券。校验通过后，路由器会用各 upstream 自己的 Key 去访问模型提供商。"
+    :loading="loading"
+    :page="page"
+    :page-size="pageSize"
+    :total="filtered.length"
+    @update:page="page = $event"
+    @update:page-size="pageSize = $event"
   >
     <template #actions>
+      <BaseButton variant="ghost" size="sm" @click="load">刷新</BaseButton>
       <BaseButton variant="primary" size="sm" @click="openAdd">+ 新增 Key</BaseButton>
     </template>
 
-    <!-- Key 列表 -->
-    <el-table :data="keys" stripe v-loading="loading">
-      <el-table-column label="名称" min-width="140">
-        <template #default="{ row }">{{ row.name }}</template>
-      </el-table-column>
-      <el-table-column label="Key" min-width="200">
-        <template #default="{ row }">
-          <el-text type="info" size="small">{{ row.key_masked }}</el-text>
-        </template>
-      </el-table-column>
-      <el-table-column label="分组" width="200">
-        <template #default="{ row }">
-          <BaseBadge v-for="g in row.groups" :key="g" variant="default" style="margin-right: 4px">{{ g }}</BaseBadge>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <BaseBadge :variant="row.enabled ? 'green' : 'red'">
-            {{ row.enabled ? '启用' : '禁用' }}
-          </BaseBadge>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="420" fixed="right">
-        <template #default="{ row }">
-          <div class="row-actions">
-            <BaseButton variant="ghost" size="sm" @click="openEdit(row)">修改</BaseButton>
-            <BaseButton variant="ghost" size="sm" @click="handleToggle(row)">
-              {{ row.enabled ? '禁用' : '启用' }}
-            </BaseButton>
-            <BaseButton variant="primary" size="sm" @click="showCopy(row)">复制 Key</BaseButton>
-            <BaseButton variant="ghost" size="sm" @click="openUsage(row)">接入说明</BaseButton>
-            <BaseButton variant="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
-          </div>
-        </template>
-      </el-table-column>
-      <template #empty>
-        <BaseEmptyState description="暂无 API Key，请点击上方按钮新增" />
+    <template #filters>
+      <FilterBar :loading="loading" @search="applyFilter" @reset="resetFilter">
+        <FilterField label="名称 / Key" :width="260">
+          <BaseInput
+            v-model="filters.keyword"
+            size="sm"
+            placeholder="输入关键字搜索"
+            @keydown.enter="applyFilter"
+          />
+        </FilterField>
+        <FilterField label="分组" :width="160">
+          <el-select v-model="filters.group" size="small" clearable placeholder="全部分组">
+            <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
+          </el-select>
+        </FilterField>
+        <FilterField label="状态" :width="130">
+          <el-select v-model="filters.enabled" size="small" clearable placeholder="全部">
+            <el-option label="启用" :value="true" />
+            <el-option label="禁用" :value="false" />
+          </el-select>
+        </FilterField>
+      </FilterBar>
+    </template>
+
+    <template #toolbar>
+      <ListToolbar
+        :count="selected.length"
+        :total="filtered.length"
+        :summary="`已启用 ${enabledCount} 个`"
+        :actions="batchActions"
+        dataset="api-keys"
+        batch-export
+        :export-params="exportParams"
+        :selected-ids="selected.map((r: any) => r.key)"
+        @clear="clearSelection"
+      />
+    </template>
+
+    <DataTable
+      ref="tableRef"
+      :data="paged"
+      :columns="columns"
+      row-key="key"
+      selectable
+      empty-text="暂无 API Key，请点击右上角「新增 Key」"
+      @selection-change="(rows: any[]) => (selected = rows)"
+    >
+      <template #cell-name="{ row }">
+        <span class="ak-name">{{ row.name }}</span>
       </template>
-    </el-table>
+      <template #cell-key="{ row }">
+        <code class="ak-code">{{ row.key_masked }}</code>
+      </template>
+      <template #cell-groups="{ row }">
+        <BaseBadge v-for="g in row.groups" :key="g" variant="default" style="margin-right: 4px">
+          {{ g }}
+        </BaseBadge>
+      </template>
+      <template #cell-enabled="{ row }">
+        <BaseBadge :variant="row.enabled ? 'green' : 'red'">
+          {{ row.enabled ? '启用' : '禁用' }}
+        </BaseBadge>
+      </template>
+      <template #cell-actions="{ row }">
+        <RowActions
+          :items="[
+            { label: '修改', onClick: () => openEdit(row) },
+            { label: '复制', onClick: () => showCopy(row) },
+            { label: '说明', onClick: () => openUsage(row) },
+            { label: '删除', variant: 'danger', divider: true, onClick: () => handleDelete(row) },
+          ]"
+        />
+      </template>
+    </DataTable>
 
     <!-- 新增 Key 弹窗 -->
     <BaseModal v-model:visible="addVisible" title="新增 API Key" size="wide">
@@ -144,21 +185,23 @@
         </div>
       </div>
     </BaseModal>
-  </BaseSection>
+  </ListPage>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
-import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import { confirmDanger } from '@/components/base/BaseConfirm'
+import {
+  ListPage, DataTable, FilterBar, FilterField, ListToolbar, RowActions,
+} from '@/components/list'
+import type { DataColumn, RowActionItem } from '@/components/list'
 import { addApiKey, deleteApiKey, listApiKeys, updateApiKey } from '@/api/apiKeys'
 import { listUpstreams } from '@/api/upstreams'
 import { reloadConfig } from '@/api/common'
@@ -235,6 +278,87 @@ async function copyText(text: string) {
 const addForm = reactive({ name: '', key: '', groups: ['free'] as string[] })
 const editForm = reactive({ key: '', name: '', groups: [] as string[], enabled: true })
 
+// ---- 筛选 / 分页 / 多选 ----
+const filters = reactive({ keyword: '', group: '', enabled: '' as boolean | '' })
+const applied = reactive({ keyword: '', group: '', enabled: '' as boolean | '' })
+const page = ref(1)
+const pageSize = ref(20)
+const selected = ref<any[]>([])
+const tableRef = ref<any>(null)
+
+const filtered = computed(() => {
+  return keys.value.filter((k) => {
+    if (applied.keyword) {
+      const kw = applied.keyword.toLowerCase()
+      const hit = String(k.name || '').toLowerCase().includes(kw)
+        || String(k.key || '').toLowerCase().includes(kw)
+      if (!hit) return false
+    }
+    if (applied.group && !(k.groups || []).includes(applied.group)) return false
+    if (applied.enabled !== '' && !!k.enabled !== applied.enabled) return false
+    return true
+  })
+})
+
+const enabledCount = computed(() => filtered.value.filter((k) => k.enabled).length)
+
+const paged = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
+
+const exportParams = computed<Record<string, string>>(() => {
+  const p: Record<string, string> = {}
+  if (applied.keyword) p.keyword = applied.keyword
+  if (applied.group) p.group = applied.group
+  if (applied.enabled !== '') p.enabled = applied.enabled ? '1' : '0'
+  return p
+})
+
+const columns: DataColumn[] = [
+  { key: 'name', label: '名称', width: 170 },
+  { key: 'key', label: 'Key', minWidth: 200 },
+  { key: 'groups', label: '分组', width: 180 },
+  { key: 'enabled', label: '状态', width: 100 },
+  { key: 'actions', label: '操作', width: 230, fixed: 'right', ellipsis: false },
+]
+
+/** 批量操作：未选中时由 ListToolbar 自动置灰 */
+const batchActions = computed<RowActionItem[]>(() => [
+  {
+    label: '批量启用',
+    onClick: () => batchToggle(true),
+  },
+  {
+    label: '批量禁用',
+    onClick: () => batchToggle(false),
+  },
+  {
+    label: '批量删除',
+    variant: 'danger',
+    onClick: batchDelete,
+  },
+])
+
+function clearSelection() {
+  tableRef.value?.clearSelection?.()
+  selected.value = []
+}
+
+function applyFilter() {
+  applied.keyword = filters.keyword.trim()
+  applied.group = filters.group
+  applied.enabled = filters.enabled
+  page.value = 1
+}
+
+function resetFilter() {
+  filters.keyword = ''
+  filters.group = ''
+  filters.enabled = ''
+  applyFilter()
+}
+
 function genKey(): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
   let s = ''
@@ -273,17 +397,76 @@ function openEdit(row: any) {
   editVisible.value = true
 }
 
-async function handleToggle(row: any) {
-  await updateApiKey(row.key, { enabled: !row.enabled })
-  ElMessage.success(row.enabled ? '已禁用' : '已启用')
-  await reloadConfig()
-  load()
-}
-
 async function showCopy(row: any) {
   const ok = await copyToClipboard(row.key)
   if (ok) ElMessage.success('已复制到剪贴板')
   else ElMessage.error('复制失败，请手动选择复制')
+}
+
+/**
+ * 批量启停：逐条调用现有 update 接口（后端没有批量端点，保持行为一致最重要）
+ *
+ * CH-043：操作完**保留选中**——用户常要连续点「禁用 → 再启用」，
+ * 每次都重新勾选很烦。reload 后按 key 回填勾选。
+ */
+async function batchToggle(enabled: boolean) {
+  const rows = selected.value
+  if (!rows.length) return
+  const verb = enabled ? '启用' : '禁用'
+  const keepKeys = rows.map((r: any) => r.key)
+  try {
+    for (const row of rows) {
+      await updateApiKey(row.key, { enabled })
+    }
+    ElMessage.success(`已${verb} ${keepKeys.length} 个 Key`)
+    await reloadConfig()
+    await load()
+    // 数据换了新对象，按 key 把勾选补回去
+    tableRef.value?.setSelection?.(keepKeys)
+  } catch {
+    ElMessage.error(`批量${verb}失败`)
+  }
+}
+
+/**
+ * 批量删除
+ *
+ * CH-043：删完必须重新核对选中 —— 已删除的行不能继续留在 selected 里，
+ * 否则工具条会显示「已选 N 项」但表格里一条都没有，再点批量删除会去删不存在的记录。
+ * 做法：删除后与最新列表求交集，只保留仍然存在的行。
+ */
+async function batchDelete() {
+  const rows = selected.value
+  if (!rows.length) return
+  const ok = await confirmDanger(`确定删除选中的 ${rows.length} 个 Key 吗？`, '删除后使用这些 Key 的客户端将立即无法访问。')
+  if (!ok) return
+
+  const tryKeys = rows.map((r: any) => r.key)
+  const failed: string[] = []
+  for (const key of tryKeys) {
+    try {
+      await deleteApiKey(key)
+    } catch {
+      failed.push(key)
+    }
+  }
+
+  const deleted = tryKeys.length - failed.length
+  if (deleted > 0) ElMessage.success(`已删除 ${deleted} 个 Key`)
+  if (failed.length) ElMessage.warning(`${failed.length} 个 Key 删除失败，已保留选中`)
+
+  await reloadConfig()
+  await load()
+
+  if (!failed.length) {
+    // 全部删成功：选中彻底清空
+    clearSelection()
+  } else {
+    // 部分失败：只保留仍在最新列表里的（避免幽灵选中）
+    const aliveKeys = new Set(keys.value.map((k: any) => String(k.key)))
+    const keep = failed.filter((k) => aliveKeys.has(String(k)))
+    tableRef.value?.setSelection?.(keep)
+  }
 }
 
 async function handleDelete(row: any) {
@@ -336,10 +519,13 @@ onMounted(load)
 </script>
 
 <style scoped>
-.row-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.ak-name {
+  font-weight: 600;
+}
+.ak-code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 .key-input-row {
   display: flex;

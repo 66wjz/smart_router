@@ -146,36 +146,85 @@
       </el-form>
     </BaseSection>
 
-    <!-- 分组管理 -->
-    <BaseSection variant="card" title="分组管理" style="margin-top: 16px">
+    <!--
+      分组管理（CH-048：改为展示型列表 + 弹窗编辑，对齐上游源）
+      条目只读，点行内「修改」弹窗编辑，新增也走弹窗，每次操作即时提交。
+    -->
+    <ListPage
+      title="分组管理"
+      description="上游源和 API Key 按分组做权限隔离：API Key 只能访问其所属分组的上游源。被上游源或 API Key 引用的分组不可删除。"
+      style="margin-top: 16px"
+      :loading="loading"
+      :page="groupPage"
+      :page-size="groupPageSize"
+      :total="groups.length"
+      @update:page="groupPage = $event"
+      @update:page-size="groupPageSize = $event"
+    >
       <template #actions>
-        <BaseButton variant="primary" size="sm" @click="addGroup">+ 添加分组</BaseButton>
+        <BaseButton variant="ghost" size="sm" @click="load">刷新</BaseButton>
+        <BaseButton variant="primary" size="sm" @click="openGroupAdd">+ 添加分组</BaseButton>
       </template>
-      <BaseHint block style="margin-bottom: 12px"
-        text="上游源和 API Key 按分组做权限隔离：API Key 只能访问其所属分组的上游源。被上游源或 API Key 引用的分组不可删除。" />
-      <el-table :data="groupsForm" size="small" style="margin-bottom: 12px">
-        <el-table-column label="分组名" min-width="180">
-          <template #default="{ row }">
-            <BaseInput v-model="row.name" placeholder="如: free、premium" style="max-width: 240px" />
-          </template>
-        </el-table-column>
-        <el-table-column label="描述" min-width="280">
-          <template #default="{ row }">
-            <BaseInput v-model="row.description" placeholder="分组说明（可选）" style="max-width: 360px" />
-          </template>
-        </el-table-column>
-        <el-table-column label="" width="80" align="center">
-          <template #default="{ $index }">
-            <BaseButton variant="danger" size="sm" @click="removeGroup($index)">删除</BaseButton>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div style="display: flex; gap: 8px; align-items: center">
-        <BaseButton variant="primary" size="sm" :disabled="savingGroups" @click="handleSaveGroups">
-          {{ savingGroups ? '保存中...' : '保存分组' }}
-        </BaseButton>
-      </div>
-    </BaseSection>
+
+      <template #toolbar>
+        <ListToolbar
+          :count="selectedGroups.length"
+          :total="groups.length"
+          dataset="groups"
+          :actions="groupBatchActions"
+          selectable
+          :all-checked="allGroupChecked"
+          :indeterminate="groupIndeterminate"
+          batch-export
+          :selected-ids="selectedGroups"
+          @toggle-all="toggleAllGroups"
+          @clear="clearGroupSelection"
+        />
+      </template>
+
+      <DataTable
+        ref="groupTableRef"
+        :data="pagedGroups"
+        :columns="groupColumns"
+        row-key="name"
+        selectable
+        empty-text="暂无分组，请点击右上角「添加分组」"
+        @selection-change="(rows: any[]) => (selectedGroups = rows.map((r) => r.name))"
+      >
+        <template #cell-description="{ row }">
+          {{ row.description || '—' }}
+        </template>
+        <template #cell-actions="{ row }">
+          <RowActions
+            :items="[
+              { label: '修改', onClick: () => openGroupEdit(row) },
+              { label: '删除', variant: 'danger', onClick: () => removeGroupRow(row) },
+            ]"
+          />
+        </template>
+      </DataTable>
+    </ListPage>
+
+    <!-- 新增 / 修改分组（CH-048：共用弹窗） -->
+    <BaseModal v-model:visible="groupModal.visible" :title="groupModal.mode === 'add' ? '添加分组' : '修改分组'">
+      <el-form :model="groupModal" label-width="90px">
+        <el-form-item label="分组名" required>
+          <BaseInput v-model="groupModal.name" placeholder="如: free、premium" />
+          <BaseHint text="分组名是上游源与 API Key 的引用标识。改名后需自行把引用方改到新名字上；仍被引用的旧名无法删除。" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <BaseInput v-model="groupModal.description" placeholder="分组说明（可选）" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <BaseModalFooter
+          :loading="groupModal.saving"
+          :confirm-text="groupModal.mode === 'add' ? '确定添加' : '保存修改'"
+          @cancel="groupModal.visible = false"
+          @confirm="saveGroupModal"
+        />
+      </template>
+    </BaseModal>
 
     <!-- 配置操作 -->
     <BaseSection variant="card" title="配置操作" style="margin-top: 16px">
@@ -189,13 +238,18 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import BaseSection from '@/components/base/BaseSection.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseHint from '@/components/base/BaseHint.vue'
 import BaseNotice from '@/components/base/BaseNotice.vue'
+import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModalFooter from '@/components/base/BaseModalFooter.vue'
+import { confirmDanger } from '@/components/base/BaseConfirm'
+import { ListPage, DataTable, ListToolbar, RowActions } from '@/components/list'
+import type { DataColumn } from '@/components/list'
 import { reloadConfig } from '@/api/common'
 import { listGroups, updateGroups } from '@/api/groups'
 import { getUsageDetailConfig, saveUsageDetailConfig } from '@/api/usage'
@@ -214,8 +268,149 @@ const loading = ref(false)
 const loadFailed = ref(false)
 const reloading = ref(false)
 const saving = ref(false)
-const savingGroups = ref(false)
-const groupsForm = ref<{ name: string; description: string }[]>([])
+/** 分组列表（服务端真值，任何写入成功后都重拉） */
+const groups = ref<{ name: string; description: string }[]>([])
+
+// ---------- 分组管理：分页 + 多选 + 弹窗编辑（CH-048） ----------
+const groupPage = ref(1)
+const groupPageSize = ref(20)
+const groupTableRef = ref<any>(null)
+const selectedGroups = ref<string[]>([])
+
+const pagedGroups = computed(() => {
+  const start = (groupPage.value - 1) * groupPageSize.value
+  return groups.value.slice(start, start + groupPageSize.value)
+})
+
+const groupColumns: DataColumn[] = [
+  { key: 'name', label: '分组名', minWidth: 200 },
+  { key: 'description', label: '描述', minWidth: 300 },
+  { key: 'actions', label: '操作', width: 140, align: 'center' },
+]
+
+const groupPageNames = computed(() => pagedGroups.value.map((g) => g.name))
+const allGroupChecked = computed(() =>
+  groupPageNames.value.length > 0 && groupPageNames.value.every((n) => selectedGroups.value.includes(n)),
+)
+const groupIndeterminate = computed(() => {
+  const hit = groupPageNames.value.filter((n) => selectedGroups.value.includes(n)).length
+  return hit > 0 && hit < groupPageNames.value.length
+})
+
+function toggleAllGroups(checked: boolean) {
+  if (checked) {
+    selectedGroups.value = [...new Set([...selectedGroups.value, ...groupPageNames.value])]
+  } else {
+    const drop = new Set(groupPageNames.value)
+    selectedGroups.value = selectedGroups.value.filter((n) => !drop.has(n))
+  }
+  groupTableRef.value?.setSelection?.(selectedGroups.value)
+}
+
+function clearGroupSelection() {
+  selectedGroups.value = []
+  groupTableRef.value?.clearSelection?.()
+}
+
+/**
+ * 提交分组完整列表（CH-048：即时保存）。
+ *
+ * 后端 PUT /admin/api/groups 是全量替换语义，所以每次只改一处、
+ * 其余原样带上。成功后重拉（后端会 strip 名字、丢空名），
+ * 失败也重拉一次，把界面冲回服务端真值，避免「看着改了其实没改」。
+ *
+ * 错误提示交给 request.ts 的响应拦截器统一弹（它已经取了 detail），
+ * 这里不再重复弹，否则同一条错误会弹两次。
+ */
+async function commitGroups(next: { name: string; description: string }[]): Promise<boolean> {
+  try {
+    await updateGroups(next)
+    await load()
+    return true
+  } catch {
+    await load()
+    return false
+  }
+}
+
+/** 新增 / 修改共用的弹窗状态（CH-048） */
+const groupModal = reactive({
+  visible: false,
+  mode: 'add' as 'add' | 'edit',
+  /** 编辑时记录原名，用于改名校验与生成新列表 */
+  originalName: '',
+  name: '',
+  description: '',
+  saving: false,
+})
+
+function openGroupAdd() {
+  Object.assign(groupModal, { visible: true, mode: 'add', originalName: '', name: '', description: '', saving: false })
+}
+
+function openGroupEdit(row: { name: string; description: string }) {
+  Object.assign(groupModal, {
+    visible: true,
+    mode: 'edit',
+    originalName: row.name,
+    name: row.name,
+    description: row.description || '',
+    saving: false,
+  })
+}
+
+async function saveGroupModal() {
+  const name = groupModal.name.trim()
+  if (!name) {
+    ElMessage.warning('分组名不能为空')
+    return
+  }
+  // 重名校验：后端只去空不去重，前端先挡一道，避免出现两个同名分组
+  const taken = groups.value.some(
+    (g) => g.name === name && !(groupModal.mode === 'edit' && g.name === groupModal.originalName),
+  )
+  if (taken) {
+    ElMessage.warning(`分组「${name}」已存在`)
+    return
+  }
+  const description = groupModal.description.trim()
+  const next =
+    groupModal.mode === 'add'
+      ? [...groups.value, { name, description }]
+      : groups.value.map((g) =>
+          g.name === groupModal.originalName ? { name, description } : g,
+        )
+
+  groupModal.saving = true
+  const ok = await commitGroups(next)
+  groupModal.saving = false
+  if (ok) {
+    groupModal.visible = false
+    ElMessage.success(groupModal.mode === 'add' ? '分组已添加' : '分组已修改')
+  }
+}
+
+async function removeGroupRow(row: { name: string; description: string }) {
+  if (!(await confirmDanger(`确定删除分组「${row.name}」吗？`, '被上游源或 API Key 引用的分组无法删除。'))) return
+  const ok = await commitGroups(groups.value.filter((g) => g.name !== row.name))
+  if (ok) ElMessage.success('分组已删除')
+}
+
+/** 批量删除（CH-048）：一次提交，被引用的分组由后端统一拒绝 */
+async function batchRemoveGroups() {
+  const names = new Set(selectedGroups.value)
+  if (!names.size) return
+  if (!(await confirmDanger(`确定删除选中的 ${names.size} 个分组吗？`, '被上游源或 API Key 引用的分组无法删除。'))) return
+  const ok = await commitGroups(groups.value.filter((g) => !names.has(g.name)))
+  if (ok) {
+    ElMessage.success('分组已删除')
+    clearGroupSelection()
+  }
+}
+
+const groupBatchActions = computed(() => [
+  { label: '批量删除', variant: 'danger' as const, onClick: () => batchRemoveGroups() },
+])
 
 /** CH-036：同名模型自动聚合开关 */
 const autoAggregate = ref(false)
@@ -234,7 +429,7 @@ async function load() {
   loading.value = true
   loadFailed.value = false
   try {
-    const [groups, retry, failover, smartRetry, autoAgg, usageDetail]: any = await Promise.all([
+    const [groupResp, retry, failover, smartRetry, autoAgg, usageDetail]: any = await Promise.all([
       listGroups(),
       getRetryConfig(),
       getFailoverConfig(),
@@ -242,7 +437,7 @@ async function load() {
       getAutoAggregateConfig().catch(() => ({ enabled: false })),
       getUsageDetailConfig().catch(() => ({ mode: 'error_only', max_bytes: 1048576, retention_days: 14 })),
     ])
-    groupsForm.value = (groups.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
+    groups.value = (groupResp.groups || []).map((g: any) => ({ name: g.name, description: g.description || '' }))
     autoAggregate.value = Boolean(autoAgg?.enabled)
     Object.assign(usageDetailForm, {
       mode: usageDetail?.mode || 'error_only',
@@ -268,32 +463,6 @@ async function handleReload() {
     ElMessage.success('配置已热重载')
   } finally {
     reloading.value = false
-  }
-}
-
-function addGroup() {
-  groupsForm.value.push({ name: '', description: '' })
-}
-
-function removeGroup(index: number) {
-  groupsForm.value.splice(index, 1)
-}
-
-async function handleSaveGroups() {
-  const groups = groupsForm.value.filter((g) => g.name.trim())
-  if (!groups.length) {
-    ElMessage.warning('至少保留一个分组')
-    return
-  }
-  savingGroups.value = true
-  try {
-    await updateGroups(groups)
-    ElMessage.success('分组已保存')
-    await reloadConfig()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '保存分组失败')
-  } finally {
-    savingGroups.value = false
   }
 }
 

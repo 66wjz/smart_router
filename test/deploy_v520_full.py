@@ -200,7 +200,8 @@ if f_st == 200:
     f_engine = fj.get("enabled")
     f_names = [r.get("name") for r in fj.get("rules", [])]
 print("filter-rules:", f_st, "engine_enabled:", f_engine, "rules:", f_names)
-filter_ok = (filter_table and f_st == 200 and f_engine is False
+# 引擎开关是运维态（用户可自行开启），这里只校验表/端点/预置规则存在，不断言开关值
+filter_ok = (filter_table and f_st == 200
              and "DSH 身份声明" in f_names and "Claude Code 身份声明" in f_names)
 
 ok = (st == 200 and auto_off and not auto_found and has_groups and not missing
@@ -306,7 +307,7 @@ def main() -> int:
             "src.close(); dst.close()\n"
             "print('DB_BACKUP_OK')\n"
         )
-        out = run(client, f"{REMOTE_PY} - <<'PYEOF'\n{db_backup}\nPYEOF")
+        out = run(client, f"{REMOTE_PY} - <<'PYEOF'\n{db_backup}\nPYEOF", timeout=1800)
         print(out)
         if "DB_BACKUP_OK" not in out:
             print("\n!! 数据库备份失败，已中止（未做任何改动）")

@@ -19,6 +19,7 @@ from app.api.admin.logs import router as logs_router
 from app.api.admin.model_groups import router as model_groups_router
 from app.api.admin.usage import router as usage_router
 from app.api.admin.filter_rules import router as filter_rules_router
+from app.api.admin.export import router as export_router
 
 admin_router = APIRouter()
 admin_router.include_router(auth_router)
@@ -36,5 +37,6 @@ admin_router.include_router(model_groups_router)
 admin_router.include_router(usage_router)
 admin_router.include_router(logs_router)
 admin_router.include_router(filter_rules_router)
+admin_router.include_router(export_router)
 
 __all__ = ["admin_router"]
