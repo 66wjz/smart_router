@@ -174,11 +174,15 @@ async function handleChangePwd() {
   pwdLoading.value = true
   try {
     await changePassword({ old_password: pwdForm.old_password, new_password: pwdForm.new_password })
-    ElMessage.success('密码已修改')
+    // CH-049：改密后当前 token 已失效（后端校验密码指纹），主动退出回登录页，
+    // 避免用户点一下菜单才突然被 401 踢出。
+    ElMessage.success('密码已修改，请重新登录')
     pwdVisible.value = false
     pwdForm.old_password = ''
     pwdForm.new_password = ''
     pwdForm.confirm = ''
+    userStore.logout()
+    router.push('/login')
   } finally {
     pwdLoading.value = false
   }

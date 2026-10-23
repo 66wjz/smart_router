@@ -322,9 +322,9 @@ def test_integration() -> None:
     ApiKeyRepository().create("t", "sk-test-ch038", '["free"]', True)
     config.reload()
 
-    # 管理端 token（直接签一个，避免依赖默认密码）
-    from app.core.security import create_jwt
-    admin = {"Authorization": f"Bearer {create_jwt({'sub': 'admin', 'exp': int(time.time()) + 3600})}"}
+    # 管理端 token（CH-049 起 token 必须带密码指纹 pv，不能裸签）
+    from app.services.auth_service import make_admin_token
+    admin = {"Authorization": f"Bearer {make_admin_token(config.admin_config)}"}
     client = TestClient(app)
     api = {"Authorization": "Bearer sk-test-ch038"}
 

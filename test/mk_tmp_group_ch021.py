@@ -16,9 +16,11 @@ BASE = f"http://127.0.0.1:{PORT}"
 GROUP = "ch021-ui-demo"
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
-from app.core.security import create_jwt  # noqa: E402
+from app.services.auth_service import make_admin_token  # noqa: E402
+from app.core.config import config  # noqa: E402
 
-TOKEN = create_jwt({"sub": "admin", "exp": int(time.time()) + 3600})
+# CH-049 起 token 必须带密码指纹 pv，裸签会被 check_auth 拒绝
+TOKEN = make_admin_token(config.admin_config)
 
 
 def call(method, path, body=None):

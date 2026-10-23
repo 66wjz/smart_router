@@ -45,10 +45,11 @@ def call(method, path, body=None, token=None):
 print("[0] 登录")
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
-from app.core.security import create_jwt  # noqa: E402
-import time
+from app.services.auth_service import make_admin_token  # noqa: E402
+from app.core.config import config  # noqa: E402
 
-token = create_jwt({"sub": "admin", "username": "admin", "exp": int(time.time()) + 3600})
+# CH-049 起 token 必须带密码指纹 pv，裸签会被 check_auth 拒绝
+token = make_admin_token(config.admin_config)
 status, me = call("GET", "/admin/api/model-groups", token=token)
 check("鉴权通过", status == 200, f"{status} {me}")
 
