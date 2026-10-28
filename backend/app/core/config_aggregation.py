@@ -113,6 +113,20 @@ class AggregationConfigMixin:
             return (entity.get("kind") or "static") == "static"
         return name in self._model_groups
 
+    def get_aggregation_affinity(self, name: str) -> int | None:
+        """聚合级会话亲和开关（CH-052）：None=跟随全局，0=关，1=开
+
+        热路径只读一个字段，避免 get_aggregations() 的整表深拷贝。
+        """
+        entity = self._aggregations.get(name) or {}
+        raw = entity.get("affinity")
+        if raw is None or raw == "":
+            return None
+        try:
+            return 1 if int(raw) else 0
+        except (TypeError, ValueError):
+            return None
+
     def get_aggregation_groups(self, name: str) -> set[str]:
         """聚合可用分组集合（CH-034）
 

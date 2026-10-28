@@ -435,9 +435,9 @@ class RouterService:
     def _affinity_enabled_for(self, model_name: str) -> bool:
         if not self.config.affinity_enabled:
             return False
-        entity = self.config.get_aggregations().get(model_name)
-        if entity is not None and entity.get("affinity") is not None:
-            return bool(entity.get("affinity"))
+        override = self.config.get_aggregation_affinity(model_name)
+        if override is not None:
+            return bool(override)
         return True
 
     def _candidate_healthy(self, cand: dict) -> bool:
