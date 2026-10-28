@@ -9,6 +9,8 @@ import logging
 import threading
 import time
 
+from app.core.affinity import current_preferred_key, current_used_key
+
 log = logging.getLogger("router")
 
 
@@ -40,16 +42,21 @@ class KeyPool:
         return True
 
     def pick(self, upstream_id: str, keys: list[str]) -> str | None:
-        """轮询选择一个可用 Key；无可用返回 None"""
+        """选择 Key：会话亲和优先用上次成功的 Key，否则轮询"""
         if not keys:
             return None
+        preferred = current_preferred_key.get()
         with self._lock:
+            if preferred and preferred in keys and self._is_key_available(upstream_id, preferred):
+                current_used_key.set(preferred)
+                return preferred
             idx = self._rr.get(upstream_id, -1)
             for _ in range(len(keys)):
                 idx = (idx + 1) % len(keys)
                 key = keys[idx]
                 if self._is_key_available(upstream_id, key):
                     self._rr[upstream_id] = idx
+                    current_used_key.set(key)
                     return key
         return None
 

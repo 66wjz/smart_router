@@ -16,6 +16,28 @@ from app.repositories.base import BaseRepository
 
 class AggregationRepository(BaseRepository):
     TABLE = "agg_unified"
+    _affinity_ready = False
+
+    def _ensure_affinity_column(self) -> None:
+        """CH-052：老库幂等补 affinity 列（NULL=跟随全局）"""
+        if AggregationRepository._affinity_ready:
+            return
+        try:
+            cols = {c.get("name") for c in self.query(f"PRAGMA table_info({self.TABLE})")}
+            if "affinity" not in cols:
+                self.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN affinity INTEGER DEFAULT NULL")
+        except Exception:
+            pass
+        AggregationRepository._affinity_ready = True
+
+    @staticmethod
+    def _parse_affinity(raw) -> int | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            return 1 if int(raw) else 0
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _parse_members(raw) -> list[dict]:
@@ -102,10 +124,11 @@ class AggregationRepository(BaseRepository):
 
     def list_all(self) -> dict[str, dict]:
         """{聚合名: {kind, members, rule_bindings, groups, enabled, ...}}；表不存在时返回空"""
+        self._ensure_affinity_column()
         try:
             rows = self.query(
                 f"SELECT name, kind, members, rule_bindings, groups, enabled, probe_enabled, template_id, "
-                f"sort_mode, interval_seconds, slow_threshold_seconds, schedule, remark "
+                f"sort_mode, interval_seconds, slow_threshold_seconds, schedule, remark, affinity "
                 f"FROM {self.TABLE} ORDER BY kind, name"
             )
         except Exception:
@@ -126,21 +149,24 @@ class AggregationRepository(BaseRepository):
                 "slow_threshold_seconds": r.get("slow_threshold_seconds"),
                 "schedule": self._parse_schedule(r.get("schedule")),
                 "remark": r.get("remark") or "",
+                "affinity": r.get("affinity"),
             }
         return result
 
     def upsert(self, name: str, data: dict) -> None:
         """新建或更新一个聚合（未提供的字段保持原值，用 COALESCE 实现部分更新语义）"""
+        self._ensure_affinity_column()
         kind = data.get("kind") or "static"
         members = self._parse_members(data.get("members"))
         bindings = self._parse_bindings(data.get("rule_bindings"))
         groups = self._parse_groups(data.get("groups"))
+        affinity = self._parse_affinity(data.get("affinity"))
         schedule = json.dumps(self._parse_schedule(data.get("schedule")), ensure_ascii=False)
         self.execute(
             f"INSERT INTO {self.TABLE} "
             f"(name, kind, members, rule_bindings, groups, enabled, probe_enabled, template_id, sort_mode, "
-            f" interval_seconds, slow_threshold_seconds, schedule, remark) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            f" interval_seconds, slow_threshold_seconds, schedule, remark, affinity) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             f"ON CONFLICT(name) DO UPDATE SET "
             f"kind = excluded.kind, members = excluded.members, "
             f"rule_bindings = excluded.rule_bindings, groups = excluded.groups, "
@@ -148,7 +174,7 @@ class AggregationRepository(BaseRepository):
             f"probe_enabled = excluded.probe_enabled, template_id = excluded.template_id, "
             f"sort_mode = excluded.sort_mode, interval_seconds = excluded.interval_seconds, "
             f"slow_threshold_seconds = excluded.slow_threshold_seconds, "
-            f"schedule = excluded.schedule, remark = excluded.remark, "
+            f"schedule = excluded.schedule, remark = excluded.remark, affinity = excluded.affinity, "
             f"updated_at = CURRENT_TIMESTAMP",
             (
                 name,
@@ -164,6 +190,7 @@ class AggregationRepository(BaseRepository):
                 data.get("slow_threshold_seconds"),
                 schedule,
                 data.get("remark") or "",
+                affinity,
             ),
         )
 

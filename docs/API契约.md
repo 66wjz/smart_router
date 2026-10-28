@@ -537,6 +537,7 @@ Header: `Authorization: Bearer <token>`
   { "name": "deepseek-v4-1-flash", "kind": "static", "enabled": true, "configured": true,
     "members": [{"upstream":"buddy","model":"deepseek-v4.1-flash","weight":3}],
     "groups": ["premium"],
+    "affinity": null,
     "member_count": 3, "template_id": 1, "template_name": "高频-交易时段",
     "probe": { "enabled": true, "interval_seconds": 60, "slow_threshold_seconds": 5,
                "sort_mode": "latency", "schedule": {"mode":"window","..."},
@@ -564,6 +565,7 @@ Header: `Authorization: Bearer <token>`
   - `rule_binding_summary`：卡片摘要（规则数 / 候选数 / 每条规则明细）
   - `stale_bindings`：失效项（规则已删除 `rule_missing` / 候选已移出规则 `candidate_missing`），供 UI 提示
   - `members[].weight`（CH-051）：**请求分发权重**（默认 1，后端夹到 1-100）。static 聚合按平滑加权轮询分发，2/1/1 ≈ 50%/25%/25%；成员连续失败进入冷却后自动按剩余权重重新归一
+  - `affinity`（CH-052）：会话亲和开关，`null` = 跟随全局（默认开）、`0` = 关闭、`1` = 开启。关闭后该聚合退回原权重轮询，不做会话钉住
 
 #### 4.28.2 新建 / 更新聚合
 
@@ -577,6 +579,7 @@ Header: `Authorization: Bearer <token>`
                     {"rule":"视觉理解","candidates":[{"upstream":"buddy","model":"gemini-2.5-pro"}]}],
   "groups": ["premium"],
   "enabled": true,
+  "affinity": null,
   "probe_enabled": true, "template_id": 1,
   "sort_mode": "stable|latency", "interval_seconds": 60, "slow_threshold_seconds": 5,
   "schedule": {"mode":"always|window","days":[1,2,3,4,5],"windows":[{"start":"08:00","end":"23:00"}]},
@@ -591,6 +594,7 @@ Header: `Authorization: Bearer <token>`
   - `template_id` 非空时必须存在
   - `groups`（CH-034）：聚合可用分组数组；空数组 / 未提供 = 所有 Key 可用。传入的分组名必须存在于分组表（否则 404）。**static 与 rule 均适用**
   - `members[].weight`（CH-051）：分发权重，缺省 1；仅 static 聚合生效（rule 聚合仍走 priority + 动态权重）
+  - `affinity`（CH-052）：`null`（或显式传 null）= 跟随全局、`0` = 关闭、`1` = 开启；其他值 422。仅 static/rule 聚合的会话钉住行为受影响，不改路由候选
 - **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源、模板或分组不存在
 
 #### 4.28.3 删除聚合
@@ -744,6 +748,7 @@ Header: `Authorization: Bearer <token>`
 - **出参**: `{ "total": 128, "page": 1, "size": 50, "items": [ ...log_usage 行... ] }`（按 id 倒序）
 - **CH-038 增量**: 每行补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（旧库缺列时给 0 / 0 / 1）。**只增不改**，原有字段全部保留。
 - **CH-041 增量**: `status=filtered` 筛选被请求过滤引擎拦截的记录（`error_msg LIKE '【已过滤】%'`）
+- **CH-052 增量**: 每行补 `affinity_key`（会话指纹，16 位 hash，不存原文）/ `affinity_hit`（0/1，是否命中钉子）/ `switch_reason`（`none` 命中 / `new` 新会话 / `health` 目标不健康 / `candidate_missing` 目标不在候选 / `failover` 切换后重钉 / `short` 短请求不钉 / `disabled` 聚合关闭亲和 / `no_key` 无法识别会话 / `single` 只有一个候选）。旧库缺列时给 NULL/0/NULL
 
 ### 4.30.1 单条请求详情（CH-038）
 
@@ -1175,6 +1180,7 @@ Header: `Authorization: Bearer <token>`
 | 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups（兼容）；GET/PUT/DELETE /admin/api/aggregations；GET .../suggestions；GET .../source-models | agg_unified |
 | 聚合独立分组（门面权限） | PUT /admin/api/aggregations（`groups`）；GET /admin/api/aggregations（`groups`）；GET /v1/models 按聚合分组过滤 | agg_unified(groups), sys_setting(groups) |
 | 聚合探测与排序配置 | PUT /admin/api/aggregations（probe_* / sort_mode / schedule / template_id）；GET /admin/api/model-groups/probe-configs（兼容） | agg_unified |
+| 会话亲和（缓存优先路由，CH-052） | PUT /admin/api/aggregations（`affinity`）；GET /admin/api/aggregations（`affinity`）；/v1 路由钉住行为 | agg_unified(affinity), log_usage(affinity_key / affinity_hit / switch_reason) |
 | 探测模板 | GET/POST /admin/api/probe-templates；PUT/DELETE /admin/api/probe-templates/{id} | agg_probe_template |
 | 请求过滤规则 | GET/POST /admin/api/filter-rules；PUT/DELETE /admin/api/filter-rules/{id}；PUT /admin/api/filter-rules/engine；POST /admin/api/filter-rules/test | filter_rule |
 | 探测计划与排班表 | GET /admin/api/probe-plan（兼容 .../model-groups/probe-plan）；GET /admin/api/aggregations/rule-units | agg_unified, agg_probe_template, sys_setting(latency_probe) |

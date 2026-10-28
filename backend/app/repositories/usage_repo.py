@@ -20,7 +20,8 @@ class UsageRepository(BaseRepository):
             return 0
         cols = self._columns()
         extra_cols = [c for c in ("upstream_model", "cache_read_tokens",
-                                  "cache_write_tokens", "attempt_count") if c in cols]
+                                  "cache_write_tokens", "attempt_count",
+                                  "affinity_key", "affinity_hit", "switch_reason") if c in cols]
         names = (
             ["ts", "api_key_id", "api_key_name", "upstream_id", "upstream_name", "model"]
             + extra_cols
@@ -46,8 +47,8 @@ class UsageRepository(BaseRepository):
                     r.get("upstream_id"), r.get("upstream_name"), r.get("model"),
                 ]
                 for c in extra_cols:
-                    if c == "upstream_model":
-                        params.append(r.get("upstream_model"))
+                    if c in ("upstream_model", "affinity_key", "switch_reason"):
+                        params.append(r.get(c))
                     else:
                         params.append(int(r.get(c) or 0))
                 params += [
@@ -123,6 +124,9 @@ class UsageRepository(BaseRepository):
             "cache_read_tokens": "INTEGER DEFAULT 0",
             "cache_write_tokens": "INTEGER DEFAULT 0",
             "attempt_count": "INTEGER DEFAULT 1",
+            "affinity_key": "TEXT",
+            "affinity_hit": "INTEGER DEFAULT 0",
+            "switch_reason": "TEXT",
         }
         try:
             names = {c.get("name") for c in self.query(f"PRAGMA table_info({self.TABLE})")}

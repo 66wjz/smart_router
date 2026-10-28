@@ -197,6 +197,34 @@ class AppConfig(
         with self._lock:
             self._settings["filter_engine_enabled"] = bool(enabled)
 
+    # ---------- CH-052 会话亲和 ----------
+
+    @property
+    def affinity_enabled(self) -> bool:
+        """全局开关，默认 True；聚合可用 agg_unified.affinity 单独覆盖"""
+        return bool(self._settings.get("affinity_enabled", True))
+
+    @property
+    def affinity_ttl_seconds(self) -> int:
+        try:
+            return int(self._settings.get("affinity_ttl_seconds", 2700))
+        except (TypeError, ValueError):
+            return 2700
+
+    @property
+    def affinity_min_prompt_tokens(self) -> int:
+        try:
+            return int(self._settings.get("affinity_min_prompt_tokens", 2000))
+        except (TypeError, ValueError):
+            return 2000
+
+    @property
+    def affinity_max_entries(self) -> int:
+        try:
+            return int(self._settings.get("affinity_max_entries", 20000))
+        except (TypeError, ValueError):
+            return 20000
+
     def list_filter_rules(self) -> list[dict]:
         return self.filter_rules
 

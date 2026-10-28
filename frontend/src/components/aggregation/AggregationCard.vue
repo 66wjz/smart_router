@@ -20,6 +20,9 @@
         {{ g.probe.sort_mode === 'latency' ? '速度优先' : '稳定优先' }}
       </BaseBadge>
       <BaseBadge :variant="probeBadge.variant">{{ probeBadge.text }}</BaseBadge>
+      <!-- CH-052：会话亲和（跟随全局时不展示，默认开启） -->
+      <BaseBadge v-if="g.affinity === 1" variant="green">亲和: 开</BaseBadge>
+      <BaseBadge v-else-if="g.affinity === 0" variant="gray">亲和: 关</BaseBadge>
       <BaseBadge v-if="!g.enabled" variant="red">聚合已关闭</BaseBadge>
     </template>
 

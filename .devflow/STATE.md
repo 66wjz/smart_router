@@ -1,6 +1,6 @@
 # 项目流程状态
 
-> **当前版本：v5.3.0**（2026-10-28；v5.2.4 = CH-042~CH-048 列表统一化 + FB-041 双栈监听修正；v5.2.5 = CH-050 中文上游 ID 响应头编码修复（已部署）；v5.3.0 = CH-051 聚合测试 + 成员加权分发，待用户验收后部署；主仓库 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库已转私有）
+> **当前版本：v5.4.0**（2026-10-28；v5.2.4 = CH-042~CH-048 列表统一化 + FB-041 双栈监听修正；v5.2.5 = CH-050 中文上游 ID 响应头编码修复（已部署）；v5.3.0 = CH-051 聚合测试 + 成员加权分发（已部署）；v5.4.0 = CH-052 会话亲和，本地验证通过，待部署；主仓库 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库已转私有）
 
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-28（CH-051 / FB-045：聚合测试按钮 + 成员加权分发已实现并本地验证，v5.3.0 待用户验收后部署）
+- 上次更新：2026-10-28（CH-052 / FB-046：会话亲和（缓存优先路由）已实现并本地验证 38 项通过，v5.4.0 待部署——生产服务器当前不可达）
 
 ## 补建说明
 
@@ -68,7 +68,8 @@
 | v5.2.4 | 部署上线 + 生产库瘦身 + 双栈监听修正：①先清空 `log_usage`/`log_usage_detail` 并 `VACUUM`（10.14 GB → 204 KB），解决备份撑爆磁盘；②`deploy_v520_full.py` 9 步全过，含 CH-042~048 全部改动与后端导出端点；③FB-041 由 `host="::"` 改为显式双栈 socket（Python 3.12 asyncio 会置 `IPV6_V6ONLY=1`，原方案实际 IPv6-only）；④修部署冒烟「过滤引擎必须关闭」的过期断言 | ✅ 已部署生产（2026-10-22 22:30，备份 backup/20261022-223013 仅 880K）；`openapi` version=5.2.4、`ss` 显示 `*:10002`、IPv4/IPv6 双通、配置已加载 12/3/6/1/12 | 生产 |
 | CH-049 | 登录 401 提示纠正 + 改密后令牌失效（A 线 1 项 + B 线-小 1 项）：①`request.ts` 的 401 分支区分登录接口 —— 登录接口用后端 `detail`（「用户名或密码错误」）、不清 token 不跳转，其它接口行为不变；②JWT payload 加密码指纹 `pv = sha256(password)[:16]`，`check_auth` 每次与当前密码指纹比对，不一致 401「密码已变更，请重新登录」；③改密成功后前端主动 logout 回登录页；④实施中修掉「`check_auth` 默认密码 `""` vs `login` 默认 `smart-router-2026` 不一致 → 空库时全量 401」的隐藏 bug（抽 `DEFAULT_PASSWORD` 单一常量 + `current_password_version()`）；⑤3 个裸签 token 的测试改用 `make_admin_token()` | ✅ 已实现（2026-10-22）：CH-049 本体 12 项 `CH049_ALL_PASS`；回归 ch038/ch041/ch042/ch024/ch034×2/ch036/ch037/ch039/ch040 全过，ch023 的 1 项失败为**改动前既有**；`npm run build` + `compileall` 通过；**已归档 + 已提交推送**（8f5a527）；未部署（上线后所有会话失效一次） | 本地 |
 | CH-050 | 中文上游 ID 打崩 /v1 响应（A 线，FB-044）：上游源 ID 允许中文（「星-国模013」等），`_RetryLoop.response_headers()` 把 `{upstream_id}/{model}` 原样写进 `X-Served-By`；Starlette 按 latin-1 编码响应头 → `UnicodeEncodeError` → 全局兜底成 500「中转站内部错误」。管理端「测试」走 `test_non_stream` 不带该头，所以单测正常、聚合/直连走 `/v1` 才炸（影响面不止聚合）。修复：新增 `app/upstream/headers.py`（纯 ASCII 原样、非 ASCII percent-encode），`response_headers()` + `router_service` 流式头复制 + `messages`/`responses` 四处统一安全化；不动数据库与上游 ID | ✅ 已实现 + 本地验证（2026-10-27）+ **已部署生产 v5.2.5**（2026-10-28，备份 backup/ch050-20261028-000910）：`verify_header_ascii_ch050.py` 17 项全过、回归 ch040/ch039 全过、`py_compile` 通过；线上 `openapi` version=5.2.5、health 200、远程头部编码自检 `HEADER_OK ... raw_ascii=True`、日志无 UnicodeEncodeError；聚合 test_demo 当前 503 系上游 ai.88wk.org 自身 502/503（绕过中转站直连同样 502） | 生产 |
-| CH-051 | 聚合测试 + 成员加权分发（B 线-大，FB-045）：①新增 `core/weighted_rr.py` 平滑加权轮询 + `router_service._apply_weighted_order`，static 聚合在分层排序后按成员 `weight` 选首位（2/1/1≈50/25/25），冷却/探针 down 成员剔除后剩余权重重归一（2/1≈67/33），全部不可用回退原顺序；rule 聚合不变；②新增 `POST /admin/api/aggregations/test?name=`：成员逐个独立测试 + 走聚合一次（真实权重路由，返回命中成员与尝试链），不写用量、不改健康；③前端聚合卡片「测试」按钮 + `AggregationTestModal`（份额/冷却/回复/尝试链）+ 成员权重 ×N 角标 + 文案调整 | ✅ 已实现 + 本地验证（2026-10-28）：`verify_aggregation_weight_ch051.py` 17 项全过（分布/重归一/兜底/测试端点/不写用量）；回归 ch040（9b 按新语义重置轮询）/ch039/ch041/ch024/ch034/ch036 全过；`py_compile` + `npm run build` 通过；**待用户验收后部署** | 本地（v5.3.0） |
+| CH-051 | 聚合测试 + 成员加权分发（B 线-大，FB-045）：①新增 `core/weighted_rr.py` 平滑加权轮询 + `router_service._apply_weighted_order`，static 聚合在分层排序后按成员 `weight` 选首位（2/1/1≈50/25/25），冷却/探针 down 成员剔除后剩余权重重归一（2/1≈67/33），全部不可用回退原顺序；rule 聚合不变；②新增 `POST /admin/api/aggregations/test?name=`：成员逐个独立测试 + 走聚合一次（真实权重路由，返回命中成员与尝试链），不写用量、不改健康；③前端聚合卡片「测试」按钮 + `AggregationTestModal`（份额/冷却/回复/尝试链）+ 成员权重 ×N 角标 + 文案调整 | ✅ 已实现 + 本地验证（2026-10-28）：`verify_aggregation_weight_ch051.py` 17 项全过（分布/重归一/兜底/测试端点/不写用量）；回归 ch040（9b 按新语义重置轮询）/ch039/ch041/ch024/ch034/ch036 全过；`py_compile` + `npm run build` 通过；**已部署生产 v5.3.0**（2026-10-28） | 生产 |
+| CH-052 | 会话亲和：缓存优先路由（B 线-大，FB-046）：①新增 `core/affinity.py`——会话指纹 `sha256(模型 + user 字段或第一条 user 消息)[:16]`（不 hash 全量、不存原文），亲和表 TTL 45 分钟 / LRU 2 万条；②`router_service._apply_affinity`：新会话按 `score =（近 5 分钟请求数 + 活跃会话数）/ weight` 放置并钉住 `(upstream, model, key)`，命中钉子排首位，目标不健康/不在候选则重钉，请求中切换成功则改钉成功那家且**不切回**；③`key_pool.pick` 支持会话偏好 Key，同源换号后钉子跟随实际 Key；④短请求（<2000 tokens）/单候选/`affinity=0`/全局关闭不钉；⑤`agg_unified.affinity`（NULL=跟随全局/0/1）+ 编辑弹窗三选 + 卡片徽标；⑥`log_usage` 新增 `affinity_key / affinity_hit / switch_reason` | ✅ 已实现 + 本地验证（2026-10-28）：`verify_affinity_ch052.py` 38 项全过（1000 新会话 4:2:1=571/286/143、同会话 100 次同源同 Key、失败重钉不切回、Key 冷却换 Key、短请求不写表、关闭亲和恢复 40/20/10、测试端点不写表、3 字段落库）；回归 ch051/ch038/ch039/ch040/ch041/ch024/ch036 全过；`py_compile` + `npm run build` 通过；**未部署**（生产服务器不可达，恢复后按 SQL 13 → 后端 → dist 上线） | 本地（v5.4.0） |
 
 ## 历史经验参考
 
@@ -90,7 +91,7 @@
 
 ## 当前阻塞
 
-（无）
+- 生产服务器不可达（`10.10.0.2` / `192.168.31.10` 的 22 与 10002 端口均不通，Ubuntu 侧故障）：CH-052 无法部署，也无法核实各上游 Key 数量与 8326 号池账号轮换行为。恢复后按 `sql/increment/13_增量_20261028_会话亲和.sql` → 后端 → 前端 dist 顺序上线并冒烟。
 
 ## 阶段变更记录
 

@@ -254,12 +254,14 @@
       :source-models="sourceModels"
       :groups="editGroups"
       :group-options="groupOptions"
+      :affinity="editAffinity"
       :saving="savingEdit"
       @update:name="editName = $event"
       @update:kind="editKind = $event"
       @update:items="editItems = $event"
       @update:catalog="ruleCatalog = $event"
       @update:groups="editGroups = $event"
+      @update:affinity="editAffinity = $event"
       @ensure-models="ensureSourceModels"
       @remove-item="removeItem"
       @save="saveEdit"
@@ -588,6 +590,8 @@ const editName = ref('')
 const editItems = ref<MemberItem[]>([])
 /** CH-034：聚合可用分组（空 = 所有 Key 可用） */
 const editGroups = ref<string[]>([])
+/** CH-052：会话亲和；null=跟随全局，0=关闭，1=开启 */
+const editAffinity = ref<number | null>(null)
 const groupOptions = ref<{ name: string; description?: string }[]>([])
 
 const templateEditor = useTemplateEditor(templateForm, templateProbeForm, {
@@ -833,6 +837,7 @@ function openEdit(g: Aggregation) {
   editName.value = g.name
   editKind.value = 'static'
   editGroups.value = [...(g.groups || [])]
+  editAffinity.value = g.affinity ?? null
   editItems.value = (g.members || []).map((m: any) => ({
     upstream: m.upstream,
     model: m.model || g.name,
@@ -847,6 +852,7 @@ function openCreate() {
   editName.value = ''
   editKind.value = 'static'
   editGroups.value = []
+  editAffinity.value = null
   editItems.value = []
   ruleCatalog.value = buildCatalog(rules.value)
   ensureSourceModels(upstreams.value[0]?.id || '')
@@ -864,6 +870,7 @@ async function openEditRuleGroup(g: Aggregation) {
   editName.value = g.name
   editKind.value = 'rule'
   editGroups.value = [...(g.groups || [])]
+  editAffinity.value = g.affinity ?? null
   ruleCatalog.value = buildCatalog(rules.value, g)
   editVisible.value = true
 }
@@ -883,7 +890,12 @@ async function saveEdit() {
 
   savingEdit.value = true
   try {
-    const payload: Record<string, unknown> = { kind: editKind.value, enabled: true, groups: editGroups.value }
+    const payload: Record<string, unknown> = {
+      kind: editKind.value,
+      enabled: true,
+      groups: editGroups.value,
+      affinity: editAffinity.value,
+    }
     if (editKind.value === 'rule') {
       // rule 聚合不传 members（后端会拒绝）；规则绑定为空数组即"全跟随"
       payload.rule_bindings = collectBindings(ruleCatalog.value) || []

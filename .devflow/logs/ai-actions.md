@@ -5,6 +5,18 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-28 - CH-052 会话亲和：缓存优先路由（本地实现与验证）
+- 触发：用户排查缓存命中（`test_demo` 命中≈99%，`deepseek-v4-1-flash` 新会话前几轮全 miss），确认不是显示错误；要求「彻底解决」而非临时调权重
+- 用户决策：不依赖客户端改动 / 不依赖号池；新会话按负载/权重选一家后钉住；只有失败才换且换后不切回；权重与统计保留；短请求不钉；按聚合可单独开关，默认开；随后授权「按你的设计来，按 skill 流程」
+- 分类：B 线-大 → 维护迭代迷你 5 阶段；变更文档 `docs/_changes/archived/FB-046-会话亲和缓存优先路由.md`
+- 实施：①新增 `core/affinity.py`（`SessionAffinity` + 两个 contextvar：preferred/used key）；②`router_service._apply_affinity/_finish_affinity`（放置、命中、重钉、不切回、失败后改钉）+ `_UsageTracker.affinity_target`（非流式落库早于钉子完成，落库前按实际命中修正 `failover`）；③`key_pool.pick` 读 preferred key；④`agg_unified.affinity` + `log_usage` 三字段（`usage_repo` 列白名单 + 运行期幂等补列）；⑤前端编辑弹窗三选 + 卡片徽标
+- 实施中修的三个坑：`bind()` 同源重绑重复累加 `active`（改为无条件先减）；`usage_repo.insert_many` 把所有附加列 `int()` 强转，`affinity_key/switch_reason` 是 TEXT → 整批落库失败（按列区分类型）；单候选时不必占表 → 新增 `single` 提前返回
+- 验证：`test/verify_affinity_ch052.py` 38 项全过（指纹/TTL/LRU/active、1000 新会话 4:2:1=571/286/143、同会话 100 次同源同 Key、多轮不变、失败重钉不切回、Key 冷却换 Key、短请求不写表、关闭亲和恢复 40/20/10、测试端点不写表、日志三字段）；回归 ch051/ch038/ch039/ch040/ch041/ch024/ch036 全过；`py_compile` + `npm run build` 通过
+- 版本：v5.3.0 → v5.4.0（main.py ×2 / run.py / pyproject.toml / frontend package.json / README / STATE）
+- 文档：变更记录、feedback-log（FB-046）、需求规格（8.1 / 9.4.2）、功能清单（2.8.13）、API契约（4.28.1 / 4.28.2 / 4.30 / 落点表）、接口文档、系统核心流程（流程 1）、五列矩阵、README、_changes 索引
+- 状态：未部署——生产 `10.10.0.2` / `192.168.31.10` 的 22 与 10002 均不可达（Ubuntu 侧故障），恢复后按 SQL 13 → 后端 → dist 上线，并核实各源 Key 数量与 8326 号池账号轮换
+- 已知限制：跨提供商缓存物理上无法共享；号池内部账号轮换仍可能让缓存失效（本层不控制）
+
 ### 2026-10-28 - CH-051 聚合测试 + 成员加权分发（本地实现与验证）
 - 触发：用户提两个需求（聚合测试按钮 / 聚合成员按权重均衡分发），要求「按 skill 流程」
 - 分类：B 线-大 → 维护迭代迷你 5 阶段；变更文档 `docs/_changes/FB-045-聚合测试与加权分发.md`

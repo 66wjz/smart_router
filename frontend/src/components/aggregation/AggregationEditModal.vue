@@ -21,6 +21,15 @@
         </el-select>
         <BaseHint text="聚合是独立门面：此处分组决定哪些 API Key 能用它，成员所属上游源的分组不再参与校验" />
       </el-form-item>
+      <el-form-item label="会话亲和">
+        <el-radio-group :model-value="affinityValue"
+          @update:model-value="(v: any) => $emit('update:affinity', v === 'off' ? 0 : v === 'on' ? 1 : null)">
+          <el-radio value="global">跟随全局</el-radio>
+          <el-radio value="on">开启</el-radio>
+          <el-radio value="off">关闭</el-radio>
+        </el-radio-group>
+        <BaseHint text="开启后同一会话（同模型 + 相同首条消息）固定走同一上游与 Key，命中上游缓存；只有该源失败才换，换后不切回。短请求不参与" />
+      </el-form-item>
     </el-form>
 
     <MemberEditor
@@ -66,6 +75,8 @@ const props = defineProps<{
   /** CH-034：聚合可用分组（空 = 所有 Key 可用） */
   groups: string[]
   groupOptions: { name: string; description?: string }[]
+  /** CH-052：会话亲和；null=跟随全局，0=关闭，1=开启 */
+  affinity?: number | null
   saving: boolean
 }>()
 
@@ -76,6 +87,7 @@ defineEmits<{
   'update:items': [value: MemberItem[]]
   'update:catalog': [value: BindItem[]]
   'update:groups': [value: string[]]
+  'update:affinity': [value: number | null]
   'ensure-models': [upstream: string]
   'remove-item': [item: MemberItem]
   save: []
@@ -83,4 +95,7 @@ defineEmits<{
 
 const title = computed(() =>
   props.mode === 'create' ? '新建聚合' : `编辑聚合：${props.name}`)
+
+const affinityValue = computed(() =>
+  props.affinity === 0 ? 'off' : props.affinity === 1 ? 'on' : 'global')
 </script>

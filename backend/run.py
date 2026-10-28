@@ -1,5 +1,5 @@
 """
-Smart Router v5.3.0 启动入口
+Smart Router v5.4.0 启动入口
 用法：uv run run.py  或  uv run uvicorn app.main:app --port 10002
 
 FB-041 双栈监听：直接 uvicorn.run(host="::") 不可行 ——

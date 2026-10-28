@@ -359,6 +359,8 @@ class ConfigService:
                     "schedule": entity.get("schedule") or {},
                 },
                 "remark": entity.get("remark") or "",
+                # CH-052：会话亲和（NULL=跟随全局，0=关闭，1=开启）
+                "affinity": entity.get("affinity"),
             }
             if kind == "rule":
                 bindings = entity.get("rule_bindings")
@@ -411,6 +413,7 @@ class ConfigService:
                 },
                 "remark": "",
                 "member_count": len(members),
+                "affinity": None,
             })
 
         # CH-028：按人工排序重排（空数组 = 保持上面的默认顺序）

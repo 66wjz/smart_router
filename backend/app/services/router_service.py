@@ -17,6 +17,7 @@ from app.core.context import estimate_tokens, has_image
 from app.core.health import ModelHealth
 from app.core.probe import LatencyProbe
 from app.core.router_engine import get_ordered_candidates
+from app.core.affinity import SessionAffinity, current_preferred_key, current_used_key
 from app.core.usage import (
     UsageBuffer,
     current_api_key_id,
@@ -69,6 +70,12 @@ class _UsageTracker:
         self._stream_text_len = 0
         # CH-040：流式过程中收到的错误包摘要（非空表示本次流实际失败）
         self.stream_error: str | None = None
+        # CH-052：会话亲和观测
+        self.affinity_key: str | None = None
+        self.affinity_hit = False
+        self.switch_reason: str | None = None
+        # 钉住的目标 (upstream, model)，用于落库前判断是否发生了兜底切换
+        self.affinity_target: tuple[str, str] | None = None
 
     def note_first_token(self) -> None:
         if self.first_token_ms is None:
@@ -212,6 +219,11 @@ class _UsageTracker:
             return
         # CH-038：尝试链长度即尝试次数（适配器逐候选追加）
         attempts = current_attempts.get() or []
+        # CH-052：非流式在 _finish_affinity 之前就已落库，这里先按实际命中修正观测字段
+        if (self.affinity_key and self.affinity_target and status == "success"
+                and getattr(self, "upstream_id", None) != self.affinity_target[0]):
+            self.affinity_hit = False
+            self.switch_reason = "failover"
         buffer.record({
             "ts": time.time(),
             "api_key_id": current_api_key_id.get(),
@@ -230,6 +242,9 @@ class _UsageTracker:
             "cache_read_tokens": self.cache_read_tokens,
             "cache_write_tokens": self.cache_write_tokens,
             "attempt_count": max(1, len(attempts)),
+            "affinity_key": self.affinity_key,
+            "affinity_hit": 1 if self.affinity_hit else 0,
+            "switch_reason": self.switch_reason,
             "estimated": self.estimated,
             "duration_ms": int((time.time() - self.t0) * 1000),
             "first_token_ms": self.first_token_ms,
@@ -281,13 +296,16 @@ class RouterService:
         self.usage_buffer = usage_buffer
         # CH-051：固定成员聚合的加权轮询状态（按聚合名隔离，内存态）
         self.weighted = WeightedRoundRobin()
+        # CH-052：会话亲和表（缓存优先路由）
+        self.affinity = SessionAffinity()
 
     # ------------------------------------------------------------
     # 模型路由决策（返回候选列表）
     # ------------------------------------------------------------
 
     def _resolve_candidates(self, model_name: str, body: dict,
-                            key_groups: set[str] | None) -> tuple[list[dict], str]:
+                            key_groups: set[str] | None,
+                            weighted: bool = True) -> tuple[list[dict], str]:
         """
         识别模型名，返回 (候选列表, 路由模式描述)。
         模式：pointer（别名直接转发）/ aggregated（聚合路由）/ direct（直接透传，CH-019 支持同名多候选）
@@ -354,7 +372,7 @@ class RouterService:
                 candidates = self.probe.sort_group_candidates(candidates, model_name, self.health)
             # CH-051：static 聚合按成员权重做平滑加权轮询，决定「本次先试谁」；
             # 其余成员保留排序结果作为失败兜底链
-            if is_static_agg and len(candidates) > 1:
+            if is_static_agg and len(candidates) > 1 and weighted:
                 candidates = self._apply_weighted_order(model_name, candidates)
 
         if self.config.log_routing:
@@ -409,6 +427,142 @@ class RouterService:
                            key_groups: set[str] | None = None) -> tuple[list[dict], str]:
         """公开的候选解析入口：管理端「聚合测试」复用真实的路由/权重/兜底逻辑。"""
         return self._resolve_candidates(model_name, body, key_groups)
+
+    # ------------------------------------------------------------
+    # CH-052 会话亲和（缓存优先）
+    # ------------------------------------------------------------
+
+    def _affinity_enabled_for(self, model_name: str) -> bool:
+        if not self.config.affinity_enabled:
+            return False
+        entity = self.config.get_aggregations().get(model_name)
+        if entity is not None and entity.get("affinity") is not None:
+            return bool(entity.get("affinity"))
+        return True
+
+    def _candidate_healthy(self, cand: dict) -> bool:
+        upstream = cand.get("upstream", "")
+        model = cand.get("model", "")
+        if not self.health.is_available(upstream, model):
+            return False
+        info = self.probe.data.get(f"{upstream}:{model}") or {}
+        return info.get("status") != "down"
+
+    def _healthy_candidates(self, candidates: list[dict]) -> list[dict]:
+        return [c for c in candidates if self._candidate_healthy(c)]
+
+    @staticmethod
+    def _find_candidate(candidates: list[dict], upstream: str,
+                        model: str | None) -> dict | None:
+        for c in candidates:
+            if c.get("upstream") == upstream and c.get("model") == model:
+                return c
+        for c in candidates:  # 成员模型名改过时，至少按上游认领
+            if c.get("upstream") == upstream:
+                return c
+        return None
+
+    def _fallback_order(self, model_name: str, route_mode: str,
+                        candidates: list[dict]) -> list[dict]:
+        """未启用亲和/短请求/无法识别会话时，退回原行为"""
+        if route_mode == "static_agg" and len(candidates) > 1:
+            return self._apply_weighted_order(model_name, candidates)
+        return candidates
+
+    def _apply_affinity(self, model_name: str, body: dict, candidates: list[dict],
+                        route_mode: str, tracker: "_UsageTracker | None") -> tuple[list[dict], str | None]:
+        """同一会话钉住同一上游；新会话按负载/权重放置"""
+        self.affinity.configure(
+            self.config.affinity_ttl_seconds,
+            self.config.affinity_max_entries,
+            self.config.affinity_min_prompt_tokens,
+        )
+        current_preferred_key.set(None)
+        current_used_key.set(None)
+
+        if not self._affinity_enabled_for(model_name):
+            if tracker is not None:
+                tracker.switch_reason = "disabled"
+            return self._fallback_order(model_name, route_mode, candidates), None
+
+        # 只有一个候选时钉不钉都一样，不必占表
+        if len(candidates) < 2:
+            if tracker is not None:
+                tracker.switch_reason = "single"
+            return candidates, None
+
+        if self.affinity.estimate_prompt_tokens(body) < self.config.affinity_min_prompt_tokens:
+            if tracker is not None:
+                tracker.switch_reason = "short"
+            return self._fallback_order(model_name, route_mode, candidates), None
+
+        key = self.affinity.fingerprint(model_name, body)
+        if not key:
+            if tracker is not None:
+                tracker.switch_reason = "no_key"
+            return self._fallback_order(model_name, route_mode, candidates), None
+
+        if tracker is not None:
+            tracker.affinity_key = key
+
+        entry = self.affinity.lookup(key)
+        target = None
+        if entry is not None:
+            target = self._find_candidate(candidates, entry.upstream, entry.model)
+            if target is not None and self._candidate_healthy(target):
+                if tracker is not None:
+                    tracker.affinity_hit = True
+                    tracker.switch_reason = "none"
+                current_preferred_key.set(entry.key)
+            else:
+                if tracker is not None:
+                    tracker.switch_reason = "health" if target is not None else "candidate_missing"
+                target = None
+
+        if target is None:
+            pool = self._healthy_candidates(candidates) or candidates
+            chosen = self.affinity.choose(pool)
+            if chosen is None:
+                return self._fallback_order(model_name, route_mode, candidates), key
+            preferred = entry.key if (entry is not None and entry.upstream == chosen.get("upstream")) else None
+            fresh = self.affinity.bind(
+                key, chosen.get("upstream", ""), chosen.get("model", ""), preferred)
+            current_preferred_key.set(fresh.key)
+            if tracker is not None:
+                tracker.affinity_hit = False
+                tracker.switch_reason = tracker.switch_reason or "new"
+            target = chosen
+
+        self.affinity.record_request(target.get("upstream", ""))
+        if tracker is not None:
+            tracker.affinity_target = (target.get("upstream", ""), target.get("model", ""))
+        if self.config.log_routing:
+            log.info(f"[affinity] {model_name} 会话 {key} → "
+                     f"{target.get('model')}@{target.get('upstream')}")
+        return [target, *(c for c in candidates if c is not target)], key
+
+    def _finish_affinity(self, key: str | None, tracker: "_UsageTracker | None") -> None:
+        """请求成功后：发生兜底切换则把钉子改到成功那家（不切回）"""
+        if not key or tracker is None or not tracker.upstream_id:
+            return
+        entry = self.affinity.lookup(key)
+        if entry is None:
+            return
+        used_key = current_used_key.get()
+        switched = (
+            tracker.upstream_id != entry.upstream
+            or (tracker.upstream_model and entry.model and tracker.upstream_model != entry.model)
+        )
+        if switched:
+            self.affinity.bind(key, tracker.upstream_id,
+                               tracker.upstream_model or entry.model,
+                               used_key or entry.key)
+            tracker.switch_reason = "failover"
+            tracker.affinity_hit = False
+        elif used_key and used_key != entry.key:
+            # 同上游换了 Key（原 Key 冷却/重试后换了账号）→ 钉子跟到实际成功的 Key，
+            # 下一次继续用它，否则前缀缓存对不上
+            self.affinity.update_key(key, used_key)
 
     def _check_aggregation_group(self, agg_name: str, key_groups: set[str] | None) -> None:
         """聚合级权限校验（CH-034）
@@ -651,7 +805,7 @@ class RouterService:
         original_model = body.get("model", "")
         is_stream = body.get("stream", False)
 
-        candidates, route_mode = self._resolve_candidates(original_model, body, key_groups)
+        candidates, route_mode = self._resolve_candidates(original_model, body, key_groups, weighted=False)
         if not candidates:
             raise HTTPException(status_code=503, detail="无可用模型")
 
@@ -677,10 +831,23 @@ class RouterService:
         # CH-041：转发前过滤（放在 tracker 之后，命中时才能正确记入用量表）
         candidates = self._apply_filter(candidates, body, route_mode, original_model, tracker)
 
+        # CH-052：会话亲和（缓存优先）——同一会话钉住同一上游，不每请求换
+        affinity_key = None
         try:
-            return await self._forward(
+            candidates, affinity_key = self._apply_affinity(
+                original_model, body, candidates, route_mode, tracker)
+        except Exception as exc:  # 亲和层绝不能影响主链路
+            log.warning(f"[affinity] 会话亲和计算失败，回退原排序: {exc}")
+
+        try:
+            result = await self._forward(
                 candidates, body, is_stream, max_attempts, response_timeout, first_chunk_timeout,
                 tracker, protocol, client_wants_usage,
             )
         except HTTPException:
             raise
+
+        # CH-052：请求成功后发现实际命中不是钉住的目标（发生了兜底切换），
+        # 把钉子改到成功那家——最新前缀已经缓存在它那儿，下轮继续用它。
+        self._finish_affinity(affinity_key, tracker)
+        return result

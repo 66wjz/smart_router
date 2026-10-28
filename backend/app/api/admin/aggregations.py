@@ -44,6 +44,8 @@ class AggregationUpdate(BaseModel):
     # CH-034：可用分组；空 = 所有 Key 可用
     groups: list[str] | None = None
     enabled: bool | None = None
+    # CH-052：会话亲和；null = 跟随全局，0 = 关闭，1 = 开启
+    affinity: int | None = None
 
     # 探测（若挂了模板，以下自配字段不生效）
     probe_enabled: bool | None = None
@@ -84,6 +86,13 @@ class AggregationUpdate(BaseModel):
             return None
         if v < 1:
             raise ValueError("慢阈值不能小于 1 秒（0 表示跟随全局）")
+        return v
+
+    @field_validator("affinity")
+    @classmethod
+    def _affinity_ok(cls, v):
+        if v is not None and v not in (0, 1):
+            raise ValueError("affinity 只能是 0、1 或 null")
         return v
 
 
@@ -234,6 +243,8 @@ async def save_aggregation(name: str, req: AggregationUpdate, request: Request, 
         "slow_threshold_seconds": pick("slow_threshold_seconds"),
         "schedule": req.schedule if req.schedule is not None else existing.get("schedule") or {},
         "remark": req.remark if req.remark is not None else existing.get("remark") or "",
+        # CH-052：显式传 null = 恢复跟随全局
+        "affinity": pick("affinity"),
     }
     if payload["template_id"] is not None:
         valid_ids = {t["id"] for t in cfg.get_probe_templates()}

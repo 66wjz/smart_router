@@ -35,6 +35,7 @@ SQL_FILES = (
     "increment/10_增量_20261018_自动聚合开关默认关闭.sql",
     "increment/11_增量_20261019_请求详情可观测性.sql",
     "increment/12_增量_20261021_请求过滤引擎.sql",
+    "increment/13_增量_20261028_会话亲和.sql",
 )
 
 

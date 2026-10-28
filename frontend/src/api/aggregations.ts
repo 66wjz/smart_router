@@ -68,6 +68,8 @@ export interface Aggregation {
     schedule: ProbeSchedule
   }
   remark: string
+  /** CH-052：会话亲和；null=跟随全局，0=关闭，1=开启 */
+  affinity?: number | null
   rule_names?: string[]
   /** CH-024：仅 rule 聚合，null = 全跟随 */
   rule_bindings?: RuleBinding[] | null
