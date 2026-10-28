@@ -144,6 +144,7 @@
               @update:checked="(v: boolean) => toggleAggChecked(g.name, v)"
               @toggle="(v: boolean) => toggleGroup(g, v)"
               @probe="openProbe(g)"
+              @test="openTest(g)"
               @edit="g.kind === 'static' ? openEdit(g) : openEditRuleGroup(g)"
               @remove="removeGroup(g)"
               @reset="resetGroup(g)"
@@ -263,6 +264,14 @@
       @remove-item="removeItem"
       @save="saveEdit"
     />
+
+    <!-- 聚合测试（CH-051）：成员逐个 + 走聚合一次 -->
+    <AggregationTestModal
+      v-if="testTarget"
+      v-model:visible="testVisible"
+      :name="testTarget.name"
+      :kind="testTarget.kind"
+    />
   </div>
 </template>
 
@@ -289,6 +298,7 @@ import { confirmAction, confirmDanger } from '@/components/base/BaseConfirm'
 import ProbeSettingsForm, { type ProbeFormModel } from '@/components/probe/ProbeSettingsForm.vue'
 import AggregationCard from '@/components/aggregation/AggregationCard.vue'
 import AggregationEditModal from '@/components/aggregation/AggregationEditModal.vue'
+import AggregationTestModal from '@/components/aggregation/AggregationTestModal.vue'
 import ProbePlanPanel from '@/components/aggregation/ProbePlanPanel.vue'
 import TemplatePanel from '@/components/aggregation/TemplatePanel.vue'
 import { buildCatalog, collectBindings, type BindItem, type MemberItem } from '@/components/aggregation/binding'
@@ -550,6 +560,15 @@ const savingProbe = ref(false)
 const probeVisible = ref(false)
 const probeName = ref('')
 const probeForm = ref<ProbeFormModel>(emptyProbeForm())
+
+// ---------- 聚合测试弹窗（CH-051） ----------
+const testVisible = ref(false)
+const testTarget = ref<Aggregation | null>(null)
+
+function openTest(g: Aggregation) {
+  testTarget.value = g
+  testVisible.value = true
+}
 
 // ---------- 规则候选弹窗 ----------
 const ruleVisible = ref(false)

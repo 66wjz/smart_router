@@ -15,6 +15,7 @@ from app.upstream.anthropic_adapter import (
     convert_request_anthropic_to_openai,
     convert_response_openai_to_anthropic,
 )
+from app.upstream.headers import ascii_safe_headers
 
 log = logging.getLogger("router")
 
@@ -82,7 +83,7 @@ async def messages(request: Request):
         return StreamingResponse(
             anthropic_stream(),
             media_type="text/event-stream",
-            headers={k: v for k, v in resp.headers.items() if k.lower().startswith("x-")},
+            headers=ascii_safe_headers({k: v for k, v in resp.headers.items() if k.lower().startswith("x-")}),
         )
 
     if isinstance(resp, JSONResponse) and resp.status_code == 200:
@@ -94,6 +95,6 @@ async def messages(request: Request):
         return JSONResponse(
             status_code=200,
             content=anthropic_resp,
-            headers={k: v for k, v in resp.headers.items() if k.lower().startswith("x-")},
+            headers=ascii_safe_headers({k: v for k, v in resp.headers.items() if k.lower().startswith("x-")}),
         )
     return resp

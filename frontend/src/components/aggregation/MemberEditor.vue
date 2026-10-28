@@ -1,6 +1,6 @@
 <template>
   <div>
-    <BaseNotice text="拖动调整优先级（从上到下即请求尝试顺序）；每个成员可指定该源里的真实模型名，因此不同源的异名模型也能聚合到一起。" />
+    <BaseNotice text="权重决定请求分发比例（A=2、B=1、C=1 → 50%/25%/25%）；成员连续失败进入冷却后，其余成员按剩余权重自动重新分配。从上到下只决定失败时的兜底顺序。每个成员可指定该源里的真实模型名，因此不同源的异名模型也能聚合到一起。" />
 
     <div ref="dragListRef" class="drag-list">
       <div v-for="item in items" :key="item.upstream + '|' + item.model" class="drag-item">

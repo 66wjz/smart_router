@@ -143,6 +143,57 @@ export function listRuleUnits(name?: string) {
   return request.get('/admin/api/aggregations/rule-units', { params: name ? { name } : {} })
 }
 
+// ---------- 聚合测试（CH-051） ----------
+
+export interface AggregationTestMember {
+  upstream: string
+  model: string
+  /** static 成员的权重；rule 聚合为 null */
+  weight: number | null
+  /** 该成员在启用成员里占的请求比例（0-1）；rule 聚合为 null */
+  share: number | null
+  /** 是否处于健康冷却（冷却中不参与权重分发） */
+  cooling: boolean
+  status: 'ok' | 'fail' | 'skipped'
+  latency_ms?: number
+  content?: string | null
+  error?: string | null
+}
+
+export interface AggregationTestAttempt {
+  upstream: string
+  model: string
+  ok: boolean
+  latency_ms: number
+  error?: string | null
+}
+
+export interface AggregationTestAggregate {
+  ok: boolean
+  mode: string
+  candidate_count: number
+  candidates: { upstream: string; model: string; weight?: number }[]
+  served: { upstream: string; model: string; latency_ms: number; content?: string | null } | null
+  tried: AggregationTestAttempt[]
+  error: string | null
+}
+
+export interface AggregationTestResult {
+  ok: boolean
+  name: string
+  kind: 'static' | 'rule'
+  prompt: string
+  members: AggregationTestMember[]
+  summary: { total: number; ok: number; fail: number; skipped: number }
+  aggregate: AggregationTestAggregate | null
+  truncated: boolean
+}
+
+/** 聚合名可能含 /，统一走 query 参数 */
+export function testAggregation(name: string, data: { prompt?: string; include_aggregate?: boolean } = {}) {
+  return request.post('/admin/api/aggregations/test', data, { params: { name } })
+}
+
 // ---------- 探测模板 ----------
 
 export function listProbeTemplates() {

@@ -416,6 +416,9 @@ def main() -> int:
           f"最终命中第二成员 src_good（实际 {row8.get('upstream_id')}）")
 
     print("\n[9b] 聚合模型非流式同样切换")
+    # CH-051：静态聚合改为权重轮询，连续请求会先落到第二成员；
+    # 这里重置轮询状态，回到「首成员先试」以继续验证非流式的失败切换逻辑
+    app.state.router_service.weighted.reset("agg-dup")
     r = client.post("/v1/chat/completions", headers=headers, json={
         "model": "agg-dup", "messages": [{"role": "user", "content": "hi"}],
     })

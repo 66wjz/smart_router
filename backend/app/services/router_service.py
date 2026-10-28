@@ -25,6 +25,7 @@ from app.core.usage import (
     estimate_tokens_by_chars,
     parse_cache_tokens,
 )
+from app.core.weighted_rr import WeightedRoundRobin
 from app.upstream import (
     try_non_stream,
     try_non_stream_anthropic,
@@ -33,6 +34,7 @@ from app.upstream import (
     try_stream_anthropic,
     try_stream_responses,
 )
+from app.upstream.headers import ascii_safe_headers
 
 log = logging.getLogger("router")
 
@@ -277,6 +279,8 @@ class RouterService:
         self.http_client = http_client
         self.config._usage_buffer = usage_buffer
         self.usage_buffer = usage_buffer
+        # CH-051：固定成员聚合的加权轮询状态（按聚合名隔离，内存态）
+        self.weighted = WeightedRoundRobin()
 
     # ------------------------------------------------------------
     # 模型路由决策（返回候选列表）
@@ -348,6 +352,10 @@ class RouterService:
             # 全部不可用时回退配置顺序
             if len(candidates) > 1 and self.config.is_model_group(model_name):
                 candidates = self.probe.sort_group_candidates(candidates, model_name, self.health)
+            # CH-051：static 聚合按成员权重做平滑加权轮询，决定「本次先试谁」；
+            # 其余成员保留排序结果作为失败兜底链
+            if is_static_agg and len(candidates) > 1:
+                candidates = self._apply_weighted_order(model_name, candidates)
 
         if self.config.log_routing:
             detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in candidates)
@@ -355,6 +363,52 @@ class RouterService:
         # CH-041：static 聚合虽然走本分支，但语义是「聚合门面」——
         # 多个成员之间可互相替代，命中过滤规则时应静默换成员而非报错。
         return candidates, ("static_agg" if is_static_agg else "direct")
+
+    @staticmethod
+    def _candidate_key(cand: dict) -> str:
+        return f"{cand.get('upstream', '')}\x00{cand.get('model', '')}"
+
+    def _apply_weighted_order(self, agg_name: str, candidates: list[dict]) -> list[dict]:
+        """CH-051：按成员权重做平滑加权轮询，决定「本次先试谁」。
+
+        - 冷却中（健康模块）或探针 status=down 的成员不进权重池 → 剩余成员按
+          剩余权重自动重新归一（C 挂了就变成 A=2/B=1）。
+        - 可用成员不足 2 个时退回原顺序，绝不让权重把请求打成无候选。
+        - 被选中的成员排到第一位，其余保留排序结果当失败兜底链。
+        """
+        pool: list[dict] = []
+        for c in candidates:
+            uid, model = c.get("upstream", ""), c.get("model", "")
+            if not self.health.is_available(uid, model):
+                continue
+            info = self.probe.data.get(f"{uid}:{model}") or {}
+            if info.get("status") == "down":
+                continue
+            pool.append(c)
+        if len(pool) < 2:
+            return candidates
+
+        chosen_key = self.weighted.pick(
+            agg_name, [(self._candidate_key(c), int(c.get("weight") or 1)) for c in pool],
+        )
+        chosen = next((c for c in pool if self._candidate_key(c) == chosen_key), None)
+        if chosen is None:
+            return candidates
+
+        ordered = [chosen, *(c for c in candidates if c is not chosen)]
+        if self.config.log_routing:
+            weight_str = ", ".join(
+                f"{c.get('model')}@{c.get('upstream')}×{max(1, int(c.get('weight') or 1))}"
+                for c in pool
+            )
+            log.info(f"[weight] 聚合 {agg_name} 权重分发 [{weight_str}] → "
+                     f"命中 {chosen.get('model')}@{chosen.get('upstream')}")
+        return ordered
+
+    def resolve_candidates(self, model_name: str, body: dict,
+                           key_groups: set[str] | None = None) -> tuple[list[dict], str]:
+        """公开的候选解析入口：管理端「聚合测试」复用真实的路由/权重/兜底逻辑。"""
+        return self._resolve_candidates(model_name, body, key_groups)
 
     def _check_aggregation_group(self, agg_name: str, key_groups: set[str] | None) -> None:
         """聚合级权限校验（CH-034）
@@ -583,7 +637,8 @@ class RouterService:
         return StreamingResponse(
             gen_with_usage(),
             media_type="text/event-stream",
-            headers={k: v for k, v in resp.headers.items()},
+            # CH-050：统一 ASCII 安全化，避免上游/适配器头里的中文触发 latin-1 编码错误
+            headers=ascii_safe_headers(resp.headers),
         )
 
     # ------------------------------------------------------------

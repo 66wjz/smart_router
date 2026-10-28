@@ -5,6 +5,27 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-28 - CH-051 聚合测试 + 成员加权分发（本地实现与验证）
+- 触发：用户提两个需求（聚合测试按钮 / 聚合成员按权重均衡分发），要求「按 skill 流程」
+- 分类：B 线-大 → 维护迭代迷你 5 阶段；变更文档 `docs/_changes/FB-045-聚合测试与加权分发.md`
+- 用户拍板：所有固定成员聚合默认按权重轮流（权重全 1 = 平均轮询）；测试 = 逐个成员 + 走聚合一次；版本 v5.3.0
+- 实施：①`core/weighted_rr.py`（SWRR）+ `router_service._apply_weighted_order`（冷却/探针 down 剔除、剩余权重重归一、全员不可用回退原顺序）+ 公开 `resolve_candidates`；②`api/admin/aggregations.py` 新增 `POST /admin/api/aggregations/test?name=`（成员逐个 + 走聚合一次，不写用量/不改健康）；③前端 `AggregationTestModal` + 聚合卡片「测试」按钮 + ChipFlow `renderMeta`（权重 ×N）+ 成员编辑文案
+- 验证：`verify_aggregation_weight_ch051.py` 17 项全过；回归 ch040（9b 按新语义重置轮询）/ch039/ch041/ch024/ch034/ch036 全过；`py_compile` + `npm run build` 通过
+- 版本：v5.2.5 → v5.3.0（main.py ×2 / run.py / pyproject.toml / frontend package.json / README / STATE）
+- 文档：变更记录、feedback-log（FB-045）、需求规格（9.4 / 9.4.1）、功能清单（2.8.11 / 2.8.12）、API契约（4.28.5）、接口文档、系统核心流程、五列矩阵、README
+- 状态：未部署（用户选择先本地验收）
+
+### 2026-10-27 - CH-050 中文上游 ID 响应头打崩 /v1（修复 + 本地验证）
+- 触发：用户截图报聚合 `test_demo` 调用 500「中转站内部错误: UnicodeEncodeError」，问「会是我们中转站的报错吗」，随后「直接改，弄到服务器上」
+- 定位：报错体来自 `main.py` 全局兜底 → 异常在本系统内；`_RetryLoop.response_headers()` 把中文 `upstream_id` 写进 `X-Served-By`，Starlette 用 latin-1 编码响应头 → UnicodeEncodeError。管理端「测试」走 `test_non_stream` 不带该头，故单测正常、/v1（聚合/直连）才炸
+- 复现：本地 starlette 1.6.0 直接构造 `JSONResponse(headers={'X-Served-By': '星-...'})` → 同一异常
+- 实施：新增 `backend/app/upstream/headers.py`（`ascii_header_value` / `ascii_safe_headers`）；`response_headers()` + `router_service._wrap_stream_with_usage` + `v1/messages.py`(2处) + `v1/responses.py`(2处) 统一安全化；不改数据库/上游 ID
+- 验证：`test/verify_header_ascii_ch050.py` 17 项全过；回归 `verify_wrapped_error_ch040.py`、`verify_usage_passthrough_ch039.py` 全过；`py_compile` 通过
+- 版本：v5.2.4 → v5.2.5（main.py ×2 / run.py / pyproject.toml / frontend package.json / README / STATE）
+- 部署：`test/deploy_ch050_hotfix.py` 已执行（2026-10-28 00:09）：备份 `backup/ch050-20261028-000910` → 上传 8 文件 → 清 pycache → 重启 → `openapi` 5.2.5 / health 200 / 远程头部自检 `raw_ascii=True`；生产 `配置已加载: 20 上游源, 3 规则, 6 密钥, 2 别名, 15 聚合`
+- 线上复测：`test_demo` 不再 500（UnicodeEncodeError 已消失），当前返回 503「所有模型均不可用」——绕过中转站直连上游 `ai.88wk.org`（用其自己的 Key）同样 502/503（deepseek-flash 502、deepseek-v4-flash 502、deepseek-v4.1-flash 503、gpt-5.6-luna 404）→ **上游自身故障**，非本系统；另成员「星-国产模型」为禁用状态，聚合只有 2 个候选
+- 文档：变更记录、feedback-log（FB-044）、STATE（CH-050）、API契约（变更记录）、README（X-Served-By 说明）
+
 ### 2026-10-22 - CH-049 收尾（归档 + 经验沉淀）
 - 触发：用户「现在中转这个没事了，先按照 skill 流程收好尾」
 - 前置状态核对：工作区干净、`8f5a527` 已推送、远端一致

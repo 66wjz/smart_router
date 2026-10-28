@@ -563,6 +563,7 @@ Header: `Authorization: Bearer <token>`
   - `rule_bindings`（CH-024，仅 rule）：`null`/`[]` = 全跟随（所有规则、全部候选）；`[{"rule","candidates"}]` 中 `candidates=null` 表示该规则候选全跟随，数组表示显式候选子集
   - `rule_binding_summary`：卡片摘要（规则数 / 候选数 / 每条规则明细）
   - `stale_bindings`：失效项（规则已删除 `rule_missing` / 候选已移出规则 `candidate_missing`），供 UI 提示
+  - `members[].weight`（CH-051）：**请求分发权重**（默认 1，后端夹到 1-100）。static 聚合按平滑加权轮询分发，2/1/1 ≈ 50%/25%/25%；成员连续失败进入冷却后自动按剩余权重重新归一
 
 #### 4.28.2 新建 / 更新聚合
 
@@ -589,6 +590,7 @@ Header: `Authorization: Bearer <token>`
   - `rule_bindings[].rule` 必须存在于当前规则表（否则 404）；`candidates` 里的 `{upstream, model}` 必须属于该规则的候选（否则 400）；规则候选列表为空时不允许绑定（400）
   - `template_id` 非空时必须存在
   - `groups`（CH-034）：聚合可用分组数组；空数组 / 未提供 = 所有 Key 可用。传入的分组名必须存在于分组表（否则 404）。**static 与 rule 均适用**
+  - `members[].weight`（CH-051）：分发权重，缺省 1；仅 static 聚合生效（rule 聚合仍走 priority + 动态权重）
 - **错误码**: 400 name/kind 缺失或 rule 传成员 / 404 上游源、模板或分组不存在
 
 #### 4.28.3 删除聚合
@@ -629,6 +631,45 @@ Header: `Authorization: Bearer <token>`
 - **说明**:
   - 传 `name`：返回**该聚合按 `rule_bindings` 裁剪后**的候选展开并集
   - 不传 `name`：返回所有路由规则候选展开后的并集（旧行为，聚合名形式的候选已展开为各源真实模型名）
+
+#### 4.28.5 测试聚合（CH-051）
+
+- **路径**: `POST /admin/api/aggregations/test?name={聚合名}`（聚合名可能含 `/`，统一走 query）
+- **鉴权**: JWT
+- **入参**:
+
+```json
+{ "prompt": "你好，请回复一句话", "include_aggregate": true }
+```
+
+- **出参**:
+
+```json
+{ "ok": true, "name": "test_demo", "kind": "static", "prompt": "你好，请回复一句话",
+  "members": [
+    { "upstream": "星-国模013", "model": "deepseek-flash", "weight": 2, "share": 0.5,
+      "cooling": false, "status": "ok", "latency_ms": 820,
+      "content": "你好！", "error": null }
+  ],
+  "summary": { "total": 3, "ok": 2, "fail": 1, "skipped": 0 },
+  "aggregate": {
+    "ok": true, "mode": "static_agg", "candidate_count": 3,
+    "candidates": [{"upstream":"星-国模013","model":"deepseek-flash","weight":2}],
+    "served": {"upstream":"星-国模013","model":"deepseek-flash","latency_ms":820,"content":"你好！"},
+    "tried": [{"upstream":"...","model":"...","ok":true,"latency_ms":820,"error":null}],
+    "error": null
+  },
+  "truncated": false }
+```
+
+- **语义**:
+  - `members`：**逐个成员独立测试**。static 用配置成员（异名模型按 `model` 取真实名，去重）；rule 用该聚合绑定规则的候选并集（去重，最多 20 个，超出时 `truncated=true`）
+  - `status`：`ok` 通过 / `fail` 失败 / `skipped` 上游源或模型已禁用（不发请求）
+  - `share`：该成员在启用成员里占的请求比例（仅 static；按 `weight` 归一）
+  - `cooling`：该成员当前是否在健康冷却（冷却中不参与权重分发）
+  - `aggregate`：按**真实路由**（含权重分发与兜底顺序）再试一次；最多试 `max_attempts` 个候选，返回 `served`（命中成员）与 `tried`（尝试链）
+  - 测试请求**不写用量、不修改健康状态**，可安全反复点
+- **错误码**: 404 聚合不存在 / 400 聚合已关闭
 
 ### 4.29 探测模板（CH-023）
 
@@ -1164,3 +1205,5 @@ Header: `Authorization: Bearer <token>`
 | 2026-10-19 | CH-038：新增 4.30.1 单条请求详情（三栏报文 + 尝试链）、4.30.2 详情采集策略 GET/PUT；4.30 列表出参补 `cache_read_tokens` / `cache_write_tokens` / `attempt_count`（只增不改） | AI |
 | 2026-10-21 | CH-041：新增 4.34 请求过滤规则（CRUD + 全局开关 + 试跑）；4.27 汇总补 `filtered_count`；4.30 明细支持 `status=filtered` 筛选；五列矩阵补「请求过滤规则」行 | AI |
 | 2026-10-22 | CH-042：新增 4.24 数据导出 `GET/POST /admin/api/export/{dataset}` + `GET /admin/api/export/datasets`（10 个数据集，xlsx 由标准库手写 OOXML，零依赖） | AI |
+| 2026-10-27 | CH-050：`X-Served-By` 等响应头值统一 ASCII 安全化（非 ASCII 的 `{上游}/{模型}` 走 percent-encode），修复中文上游 ID 导致 /v1 响应 500（UnicodeEncodeError） | AI+用户 |
+| 2026-10-28 | CH-051：新增 4.28.5 测试聚合端点（成员逐个 + 走聚合一次）；`members[].weight` 明确定义为 static 聚合的请求分发权重（平滑加权轮询 + 冷却后重归一） | AI+用户 |

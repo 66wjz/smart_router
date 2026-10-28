@@ -20,6 +20,7 @@ from app.core.usage import (
     current_forward_body,
     current_response_body,
 )
+from app.upstream.headers import ascii_header_value
 
 log = logging.getLogger("router")
 
@@ -202,8 +203,9 @@ class _RetryLoop:
             log.warning(f"[smart-retry] {self.upstream_id}/{self.model.split('/')[-1]} {reason}，重试")
 
     def response_headers(self) -> dict:
+        # CH-050：上游源 ID 可能是中文，直接写进头会让 Starlette latin-1 编码失败
         return {
-            "X-Served-By": f"{self.upstream_id}/{self.model}",
+            "X-Served-By": ascii_header_value(f"{self.upstream_id}/{self.model}"),
             "X-Retry-Count": str(self.retries),
         }
 

@@ -6,6 +6,7 @@
           <span v-if="showIndex" class="cf-index">{{ indexOf(i) + 1 }}</span>
           <span class="cf-src">{{ renderUpstream(item) }}</span>
           <code class="cf-model">{{ renderModel(item) }}</code>
+          <span v-if="metaText(item)" class="cf-meta">{{ metaText(item) }}</span>
           <span v-if="showFirstLastTag && indexOf(i) === 0" class="cf-tag-first">首选</span>
           <span
             v-else-if="showFirstLastTag && indexOf(i) === items.length - 1"
@@ -62,6 +63,8 @@ const props = withDefaults(defineProps<{
   chipKey?: (item: any, index: number) => string
   renderUpstream?: (item: any) => string
   renderModel?: (item: any) => string
+  /** CH-051：chip 尾部的附加标记（如聚合成员的权重 ×2），空串不渲染 */
+  renderMeta?: (item: any) => string
   showIndex?: boolean
   /** 首个标「首选」、末个标「兜底」（聚合链路用） */
   showFirstLastTag?: boolean
@@ -78,6 +81,7 @@ const props = withDefaults(defineProps<{
   chipKey: undefined,
   renderUpstream: (item: any) => item?.upstream_name || item?.upstream || '',
   renderModel: (item: any) => item?.model || '',
+  renderMeta: undefined,
   showIndex: true,
   showFirstLastTag: false,
   arrow: false,
@@ -106,6 +110,10 @@ function indexOf(i: number): number {
 function chipKey(item: any, index: number): string {
   if (props.chipKey) return props.chipKey(item, index)
   return `${item?.upstream || ''}::${item?.model || ''}::${index}`
+}
+
+function metaText(item: any): string {
+  return props.renderMeta ? String(props.renderMeta(item) || '') : ''
 }
 
 // 成员集合变化（如切换聚合、重新拉取）时回到第一页，
@@ -156,6 +164,15 @@ watch(() => props.items, () => { page.value = 1 })
 
 .cf-src {
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.cf-meta {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-amber-muted, rgba(245, 158, 11, 0.15));
+  color: var(--accent-amber);
+  font-size: 11px;
   white-space: nowrap;
 }
 

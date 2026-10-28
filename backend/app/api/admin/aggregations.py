@@ -9,13 +9,22 @@ admin 统一聚合接口（CH-023）
 - PUT    /admin/api/aggregations?name=xxx   新建/更新（部分字段缺省保持原值）
 - DELETE /admin/api/aggregations?name=xxx   删除
 - GET    /admin/api/aggregations/rule-units rule 聚合的探测对象（候选并集，供前端预览）
+- POST   /admin/api/aggregations/test?name=xxx 测试聚合（成员逐个 + 走聚合一次，CH-051）
 """
 
+import time
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from app.api.deps import check_auth
 from app.services.config_service import ConfigService
+from app.upstream import (
+    test_non_stream,
+    test_non_stream_anthropic,
+    test_non_stream_responses,
+)
 
 router = APIRouter(prefix="/admin/api", tags=["admin-aggregations"])
 
@@ -129,6 +138,12 @@ class AggregationOrderRequest(BaseModel):
     names: list[str] = []
 
 
+class AggregationTestRequest(BaseModel):
+    """聚合测试（CH-051）：提示词 + 是否附带「走聚合一次」"""
+    prompt: str = "你好，请回复一句话"
+    include_aggregate: bool = True
+
+
 @router.get("/aggregations")
 async def list_aggregations(request: Request, _=Depends(check_auth)):
     """统一聚合列表（static + rule），含生效探测参数与模板名"""
@@ -236,6 +251,169 @@ async def delete_aggregation(name: str, request: Request, _=Depends(check_auth))
         raise HTTPException(400, "name 必填")
     svc.delete_aggregation(name)
     return {"ok": True, "name": name}
+
+
+async def _run_member_test(cfg, http_client: httpx.AsyncClient, upstream_id: str,
+                           model: str, body: dict, timeout: float) -> tuple[str | None, str | None]:
+    """按模型协议调一次上游（与上游源「测试」同一条路径，不写用量、不动健康状态）"""
+    fmt = cfg.get_model_protocol(upstream_id, model)
+    if fmt == "anthropic":
+        return await test_non_stream_anthropic(model, upstream_id, body, timeout, http_client, cfg)
+    if fmt == "responses":
+        return await test_non_stream_responses(model, upstream_id, body, timeout, http_client, cfg)
+    return await test_non_stream(model, upstream_id, body, timeout, http_client, cfg)
+
+
+@router.post("/aggregations/test")
+async def test_aggregation(name: str, req: AggregationTestRequest,
+                           request: Request, _=Depends(check_auth)):
+    """测试聚合（CH-051）
+
+    两段结果：
+    1) members：逐个成员独立打一次上游（static = 配置成员；rule = 绑定规则的候选并集，最多 20 个）
+    2) aggregate：按真实路由（含权重分发/兜底顺序）试一次，返回实际命中的成员与失败尝试链
+
+    测试请求不写用量、不改健康状态，避免「点一下测试」影响在线路由。
+    """
+    cfg = request.app.state.config
+    http_client: httpx.AsyncClient = request.app.state.http_client
+    health = request.app.state.health
+    svc = request.app.state.router_service
+
+    entity = cfg.get_aggregations().get(name)
+    if not entity:
+        raise HTTPException(404, f"聚合「{name}」不存在")
+    if not entity.get("enabled", True):
+        raise HTTPException(400, f"聚合「{name}」已关闭，无法测试")
+
+    kind = entity.get("kind") or "static"
+    prompt = (req.prompt or "").strip() or "你好，请回复一句话"
+    timeout = cfg.retry_config.get("response_timeout", 12)
+    target_body = {
+        "model": name,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 64,
+    }
+
+    # ---------- 1) 逐个成员 ----------
+    targets: list[dict] = []
+    truncated = False
+    if kind == "rule":
+        units = cfg.rule_candidate_units(name)
+        truncated = len(units) > 20
+        for u in units[:20]:
+            targets.append({"upstream": u["upstream"], "model": u["model"], "weight": None})
+    else:
+        seen: set[tuple[str, str]] = set()
+        for m in entity.get("members") or []:
+            uid = m.get("upstream") or ""
+            model = m.get("model") or name
+            if not uid or (uid, model) in seen:
+                continue
+            seen.add((uid, model))
+            targets.append({
+                "upstream": uid,
+                "model": model,
+                "weight": max(1, int(m.get("weight") or 1)),
+            })
+
+    enabled_targets = [
+        t for t in targets
+        if cfg.get_upstream(t["upstream"])
+        and cfg.is_upstream_enabled(t["upstream"])
+        and cfg.is_model_enabled(t["upstream"], t["model"])
+    ]
+    total_weight = sum(t["weight"] or 1 for t in enabled_targets) if kind == "static" else 0
+
+    results = []
+    for t in targets:
+        uid, model = t["upstream"], t["model"]
+        upstream = cfg.get_upstream(uid)
+        if not upstream:
+            results.append({**t, "status": "skipped", "error": "上游源不存在", "share": None, "cooling": False})
+            continue
+        if not cfg.is_upstream_enabled(uid):
+            results.append({**t, "status": "skipped", "error": "上游源已禁用", "share": None, "cooling": False})
+            continue
+        if not cfg.is_model_enabled(uid, model):
+            results.append({**t, "status": "skipped", "error": "该模型已禁用", "share": None, "cooling": False})
+            continue
+
+        share = round((t["weight"] or 1) / total_weight, 4) if total_weight else None
+        start = time.time()
+        content, error = await _run_member_test(cfg, http_client, uid, model, {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 64,
+        }, timeout)
+        results.append({
+            **t,
+            "share": share,
+            "cooling": not health.is_available(uid, model),
+            "status": "ok" if not error else "fail",
+            "latency_ms": int((time.time() - start) * 1000),
+            "content": (content or "")[:500] if content else None,
+            "error": error,
+        })
+
+    summary = {
+        "total": len(results),
+        "ok": sum(1 for r in results if r["status"] == "ok"),
+        "fail": sum(1 for r in results if r["status"] == "fail"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+    }
+
+    # ---------- 2) 走聚合一次 ----------
+    aggregate = None
+    if req.include_aggregate:
+        candidates, mode = svc.resolve_candidates(name, dict(target_body), None)
+        max_attempts = min(int(cfg.retry_config.get("max_attempts", 3) or 3), len(candidates))
+        tried: list[dict] = []
+        served = None
+        for cand in candidates[:max_attempts]:
+            uid, model = cand.get("upstream", ""), cand.get("model", "")
+            start = time.time()
+            content, error = await _run_member_test(cfg, http_client, uid, model, {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 64,
+            }, timeout)
+            latency = int((time.time() - start) * 1000)
+            tried.append({
+                "upstream": uid,
+                "model": model,
+                "ok": not error,
+                "latency_ms": latency,
+                "error": error,
+            })
+            if not error:
+                served = {"upstream": uid, "model": model, "latency_ms": latency,
+                          "content": (content or "")[:500]}
+                break
+        aggregate = {
+            "ok": served is not None,
+            "mode": mode,
+            "candidate_count": len(candidates),
+            "candidates": [
+                {"upstream": c.get("upstream"), "model": c.get("model"), "weight": c.get("weight", 1)}
+                for c in candidates[:max_attempts]
+            ],
+            "served": served,
+            "tried": tried,
+            "error": None if served else "所有候选均不可用",
+        }
+
+    return {
+        "ok": True,
+        "name": name,
+        "kind": kind,
+        "prompt": prompt,
+        "members": results,
+        "summary": summary,
+        "aggregate": aggregate,
+        "truncated": truncated,
+    }
+
 
 
 @router.get("/aggregations/rule-units")

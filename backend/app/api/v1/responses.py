@@ -15,6 +15,7 @@ from app.upstream.responses_adapter import (
     convert_request_responses_to_openai,
     convert_response_openai_to_responses,
 )
+from app.upstream.headers import ascii_safe_headers
 
 log = logging.getLogger("router")
 
@@ -81,7 +82,7 @@ async def responses(request: Request):
         return StreamingResponse(
             responses_stream(),
             media_type="text/event-stream",
-            headers={k: v for k, v in resp.headers.items() if k.lower().startswith("x-")},
+            headers=ascii_safe_headers({k: v for k, v in resp.headers.items() if k.lower().startswith("x-")}),
         )
 
     if isinstance(resp, JSONResponse) and resp.status_code == 200:
@@ -93,6 +94,6 @@ async def responses(request: Request):
         return JSONResponse(
             status_code=200,
             content=responses_resp,
-            headers={k: v for k, v in resp.headers.items() if k.lower().startswith("x-")},
+            headers=ascii_safe_headers({k: v for k, v in resp.headers.items() if k.lower().startswith("x-")}),
         )
     return resp

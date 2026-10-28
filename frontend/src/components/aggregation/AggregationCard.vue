@@ -32,6 +32,10 @@
         @change="(val: boolean | string | number) => $emit('toggle', Boolean(val))"
       />
       <BaseButton variant="ghost" size="sm" @click="$emit('probe')">探测设置</BaseButton>
+      <BaseButton v-if="g.configured" variant="ghost" size="sm" :disabled="!g.enabled || saving"
+        @click="$emit('test')">
+        测试
+      </BaseButton>
       <BaseButton v-if="g.kind === 'static'" variant="primary" size="sm" :disabled="saving"
         @click="$emit('edit')">
         {{ saving ? '保存中…' : '编辑成员' }}
@@ -44,11 +48,12 @@
       <BaseButton v-else variant="ghost" size="sm" :disabled="saving" @click="$emit('reset')">恢复自动</BaseButton>
     </template>
 
-    <!-- 固定成员：候选链路（CH-044 起卡片内平铺全部成员，分页交给外层列表） -->
+    <!-- 固定成员：候选链路（CH-044 起卡片内平铺全部成员，分页交给外层列表）
+         CH-051：权重 >1 的成员带 ×N 角标；首位由权重轮换决定，不再标「首选」 -->
     <ChipFlow
       v-if="g.kind === 'static'"
       :items="g.members"
-      show-first-last-tag
+      :render-meta="(m: any) => (m.weight && m.weight > 1 ? '×' + m.weight : '')"
       arrow
     />
 
@@ -102,6 +107,7 @@ const props = defineProps<{
 defineEmits<{
   toggle: [enabled: boolean]
   probe: []
+  test: []
   edit: []
   remove: []
   reset: []
