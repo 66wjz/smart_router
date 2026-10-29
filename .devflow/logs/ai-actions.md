@@ -5,6 +5,20 @@
 
 ## 操作记录（倒序，最新在最上）
 
+### 2026-10-29 - CH-053 日志列表分页不刷新（A 线，已部署）
+- 触发：用户反馈用量页「最近请求明细」切换页码/每页条数后内容不变
+- 定位：全站唯一服务端分页列表；`ListPage` 转发事件名是 `page-change`，`Usage.vue` 写成 `@change` → 监听永不触发，`update:page` 只改状态不重新请求
+- 修复：`Usage.vue` 一处 `@change="loadLogs"` → `@page-change="loadLogs"`
+- 验证：`npm run build` 通过；构建产物 Usage chunk `onPageChange` 0→1；线上 dist 已替换（`Usage-CaNHGMm2.js`）；接口自证 page1/page2 不同、size 2/5 生效、total 1522
+- 部署：dist 备份 `/opt/smart-router/backup/dist-fix-20261029/`，静态资源替换，未重启后端
+- 文档：变更记录 / feedback-log（FB-048）/ STATE（CH-053）
+
+### 2026-10-29 - 生产后台密码轮换 + 凭据本地留存
+- 背景：中转站开公网 IPv6，GitHub 曾公开初始账号密码与 Key
+- 实施：改密为 28 位强随机（旧密码立即 401、新密码 200）；凭据写入 `E:\80-project_dev\04_smart-router\.env`（.gitignore 已忽略，禁止提交，含 LAN/域名地址与管理员账号密码）
+- 核查：当前启用 API Key 均为自定义 `sk-sr-*`，仅一把旧 `sk-CHANGE-ME-premium` 处于禁用，无泄露中的默认 Key
+- 提醒：线上仍为 CH-049 之前版本，旧 JWT 最长 24h 后自然失效；如需立即踢出，部署 CH-049（JWT 带密码指纹）
+
 ### 2026-10-28 - CH-052 会话亲和：缓存优先路由（本地实现与验证）
 - 触发：用户排查缓存命中（`test_demo` 命中≈99%，`deepseek-v4-1-flash` 新会话前几轮全 miss），确认不是显示错误；要求「彻底解决」而非临时调权重
 - 用户决策：不依赖客户端改动 / 不依赖号池；新会话按负载/权重选一家后钉住；只有失败才换且换后不切回；权重与统计保留；短请求不钉；按聚合可单独开关，默认开；随后授权「按你的设计来，按 skill 流程」

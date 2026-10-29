@@ -240,7 +240,7 @@
         :total="logTotal"
         @update:page="logPage = $event"
         @update:page-size="logSize = $event"
-        @change="loadLogs"
+        @page-change="loadLogs"
       >
         <template #filters>
           <FilterBar :loading="logsLoading" @search="loadLogs" @reset="resetLogFilters">
