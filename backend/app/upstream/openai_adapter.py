@@ -101,12 +101,18 @@ def _normalize_messages(body: dict) -> None:
 
 
 def _build_endpoint(base_url: str, path: str) -> str:
-    """拼接请求端点，容错 base_url 误填完整 URL（已含目标路径时直接使用）"""
+    """拼接请求端点，容错 base_url 误填完整 URL（已含目标路径时直接使用）
+
+    CH-054：兼容 base_url 已经带 `/v1` 的写法（如本地嵌入服务 http://127.0.0.1:8090/v1），
+    避免拼成 /v1/v1/embeddings。
+    """
     base = (base_url or "").rstrip("/")
     if not base:
         return ""
     if base.endswith(path):
         return base
+    if base.endswith("/v1") and path.startswith("/v1/"):
+        return f"{base}{path[3:]}"
     return f"{base}{path}"
 
 

@@ -17,6 +17,7 @@ async def list_models(request: Request):
     key_groups = getattr(request.state, "key_groups", None)
 
     model_ids: set[str] = set()
+    model_types: dict[str, str] = {}
     for u in cfg.upstreams:
         uid = u.get("upstream_id", "")
         if not cfg.is_upstream_enabled(uid):
@@ -28,9 +29,15 @@ async def list_models(request: Request):
             # CH-019：模型级禁用不出现在客户端模型列表
             if name and cfg.is_model_enabled(uid, name):
                 model_ids.add(name)
+                # CH-054：同一模型名多源时，只要有一个源标为向量就按向量展示
+                if isinstance(m, dict) and m.get("type") == "embedding":
+                    model_types[name] = "embedding"
+                else:
+                    model_types.setdefault(name, "chat")
 
     data = [
-        {"id": mid, "object": "model", "created": 0, "owned_by": "smart-router"}
+        {"id": mid, "object": "model", "created": 0, "owned_by": "smart-router",
+         "type": model_types.get(mid, "chat")}
         for mid in sorted(model_ids)
     ]
     result = {"object": "list", "data": data}
@@ -39,13 +46,16 @@ async def list_models(request: Request):
     for pointer in cfg.model_pointers:
         pname = pointer.get("name", "")
         if pname:
+            target = pointer.get("target_model", "")
+            target_upstream = pointer.get("upstream", cfg.default_upstream)
             entry = {
                 "id": pname,
                 "object": "model",
                 "created": 0,
                 "owned_by": "smart-router",
                 "type": "pointer",
-                "target_model": pointer.get("target_model", ""),
+                "target_model": target,
+                "capability": cfg.get_model_type(target_upstream, target),
             }
             result["data"].insert(0, entry)
 
@@ -71,6 +81,7 @@ async def list_models(request: Request):
             "created": 0,
             "owned_by": "smart-router",
             "type": "aggregation",
+            "capability": "chat",
             "aggregation_kind": "rule",
             "context_length": min(ctx_values) if ctx_values else None,
             "max_output": max(output_values) if output_values else None,
@@ -95,6 +106,7 @@ async def list_models(request: Request):
             "created": 0,
             "owned_by": "smart-router",
             "type": "aggregation",
+            "capability": "chat",
             "aggregation_kind": "static",
             "member_count": len(members),
             "groups": list(entity.get("groups") or []),

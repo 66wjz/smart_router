@@ -35,6 +35,7 @@ from app.upstream import (
     try_stream_anthropic,
     try_stream_responses,
 )
+from app.upstream.embedding_adapter import embedding_timeout, try_non_stream_embedding
 from app.upstream.headers import ascii_safe_headers
 
 log = logging.getLogger("router")
@@ -203,6 +204,14 @@ class _UsageTracker:
 
     def _request_text_len(self) -> int:
         total = 0
+        # CH-054：向量请求没有 messages，估算输入用 input
+        raw_input = self.request_body.get("input")
+        if isinstance(raw_input, str):
+            total += len(raw_input)
+        elif isinstance(raw_input, list):
+            for item in raw_input:
+                if isinstance(item, str):
+                    total += len(item)
         for msg in self.request_body.get("messages", []):
             content = msg.get("content", "")
             if isinstance(content, str):
@@ -314,6 +323,12 @@ class RouterService:
         if pointer:
             target = pointer.get("target_model", model_name)
             upstream_id = pointer.get("upstream", self.config.default_upstream)
+            # CH-054：别名指向向量模型时，聊天端点拒绝并引导到 /v1/embeddings
+            if self.config.is_model_embedding(upstream_id, target):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"模型 {model_name} 指向向量模型 {target}，请使用 /v1/embeddings",
+                )
             self._check_group(upstream_id, key_groups, target)
             body["model"] = target
             return [{"model": target, "upstream": upstream_id, "max_output": None}], "pointer"
@@ -344,6 +359,12 @@ class RouterService:
 
         resolved = self.config.resolve_group_candidates(model_name)
         if not resolved:
+            # CH-054：向量模型不允许走聊天端点（给出明确引导，而非 503）
+            if self.config.collect_embedding_upstreams(model_name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"模型 {model_name} 是向量模型，请使用 /v1/embeddings",
+                )
             # 全部命中源被禁用/禁模型时，回退旧逻辑拿 upstream_id 用于报错信息
             upstream_id = self.config.find_model_upstream(model_name)
             if not is_static_agg:
@@ -427,6 +448,60 @@ class RouterService:
                            key_groups: set[str] | None = None) -> tuple[list[dict], str]:
         """公开的候选解析入口：管理端「聚合测试」复用真实的路由/权重/兜底逻辑。"""
         return self._resolve_candidates(model_name, body, key_groups)
+
+    # ------------------------------------------------------------
+    # CH-054 向量（Embedding）候选解析
+    # ------------------------------------------------------------
+
+    def _resolve_embedding_candidates(self, model_name: str,
+                                      key_groups: set[str] | None) -> tuple[list[dict], str]:
+        """向量请求的候选解析：只认 type=embedding 的已配置模型
+
+        - 别名：指针目标必须是向量模型
+        - 聚合名：本期不支持（维度/语义空间不一致，不做跨模型兜底）
+        - 直连：按上游源配置顺序，同名多源可依次兜底（同一模型名，维度一致）
+        """
+        if model_name in self.config.aggregated_names or self.config.is_static_aggregation(model_name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"聚合模型 {model_name} 不支持 /v1/embeddings，请直接指定向量模型名",
+            )
+
+        pointer = self.config.get_model_pointer(model_name)
+        if pointer:
+            target = pointer.get("target_model", model_name)
+            upstream_id = pointer.get("upstream", self.config.default_upstream)
+            if not self.config.is_model_embedding(upstream_id, target):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"别名 {model_name} 指向的不是向量模型（{target}）",
+                )
+            self._check_group(upstream_id, key_groups, target)
+            return [{"model": target, "upstream": upstream_id}], "pointer"
+
+        candidates = self.config.resolve_embedding_candidates(model_name)
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型 {model_name} 不是已配置的向量模型（请在上游源把该模型类型设为 embedding）",
+            )
+
+        allowed: list[dict] = []
+        for c in candidates:
+            try:
+                self._check_group(c["upstream"], key_groups, c["model"])
+            except HTTPException:
+                continue
+            allowed.append(c)
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"API Key 无权访问模型 {model_name} 所在的上游源",
+            )
+        if self.config.log_routing:
+            detail = ", ".join(f"{c['model']}@{c['upstream']}" for c in allowed)
+            log.info(f"向量转发: {model_name} → 候选 {len(allowed)} 个 [{detail}]")
+        return allowed, "embedding"
 
     # ------------------------------------------------------------
     # CH-052 会话亲和（缓存优先）
@@ -798,6 +873,48 @@ class RouterService:
     # ------------------------------------------------------------
     # 对外入口
     # ------------------------------------------------------------
+
+    async def embeddings(self, body: dict, key_groups: set[str] | None):
+        """POST /v1/embeddings 主处理（CH-054）
+
+        非流式；只从 embedding 类型模型组候选；复用 Key 池/重试/用量记账。
+        不做聚合、不做探测排序、不做会话亲和、不做请求过滤。
+        """
+        original_model = body.get("model", "")
+        candidates, _route_mode = self._resolve_embedding_candidates(original_model, key_groups)
+        if not candidates:
+            raise HTTPException(status_code=503, detail="无可用向量模型")
+
+        timeout = embedding_timeout(self.config)
+        tracker: _UsageTracker | None = None
+        if self.usage_buffer is not None:
+            tracker = _UsageTracker(self.config, original_model, "embedding", False, body)
+
+        tried: list[str] = []
+        for cand in candidates:
+            model = cand["model"]
+            upstream_id = cand["upstream"]
+            tried.append(f"{model}@{upstream_id}")
+
+            if len(tried) > 1 and self.config.log_routing:
+                log.info(f"向量重试({len(tried)}): {model.split('/')[-1]}@{upstream_id}")
+
+            result = await try_non_stream_embedding(
+                model, upstream_id, body, timeout, self.http_client,
+                self.config, self.health,
+            )
+            if result is not None:
+                if tracker is not None:
+                    tracker.set_hit_upstream(upstream_id, model)
+                    result = self._log_non_stream(result, tracker)
+                return result
+
+        if tracker is not None:
+            tracker.finish_error(f"所有向量模型均不可用 (尝试了: {', '.join(tried)})", 503)
+        raise HTTPException(
+            status_code=503,
+            detail=f"所有向量模型均不可用 (尝试了: {', '.join(tried)})",
+        )
 
     async def chat_completions(self, body: dict, key_groups: set[str] | None,
                                protocol: str = "chat"):

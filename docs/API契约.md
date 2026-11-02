@@ -134,6 +134,39 @@ Header: `Authorization: Bearer <token>`
 - **推理模型**: 上游 `reasoning` 内容映射为 Responses `reasoning` output item（非流式）/ `response.reasoning_summary_text.delta` 事件（流式）（CH-018）
 - **错误**: Responses 标准错误格式 `{"error":{"message","type","code"}}`（CH-018）
 
+### 2.3.1 向量嵌入（CH-054）
+
+- **路径**: `POST /v1/embeddings`
+- **鉴权**: 路由层 API Key（Bearer）
+- **说明**: OpenAI 兼容嵌入接口；非流式，请求体除 `model` 外**原样透传**（`input` / `encoding_format` / `dimensions` / 未知字段均不改写），响应原样返回
+- **入参**:
+
+```json
+{
+  "model": "bge-small-zh-v1.5",
+  "input": "单条文本",
+  "encoding_format": "float"
+}
+```
+
+  - `input`: 字符串 或 字符串数组（批量按 `index` 返回）；空字符串 / 空数组 → 400
+  - `model`: 必须是已配置且 `type=embedding` 的模型，或指向向量模型的别名
+- **出参**: 上游标准 OpenAI 向量响应：
+
+```json
+{
+  "object": "list",
+  "data": [{ "object": "embedding", "index": 0, "embedding": [0.0123, "..."] }],
+  "model": "bge-small-zh-v1.5",
+  "usage": { "prompt_tokens": 9, "total_tokens": 9 }
+}
+```
+
+- **路由**: 别名 → 目标向量模型；直连 → 按上游源配置顺序，同名多源可依次兜底；**聚合名 → 400**（本期不支持）
+- **容错**: Key 池轮询；401/403/429/超时换 Key；智能重试开启时 5xx 重试；上游 200 + 错误包按失败处理（CH-040）
+- **响应头**: `X-Served-By`（实际命中 `上游/模型`，ASCII 安全化）、`X-Retry-Count`
+- **错误**: OpenAI 规范 `{"error":{"message","type","code"}}`；400（参数/类型错误）、403（分组无权限）、503（全部候选不可用）
+
 ### 2.4 模型列表
 
 - **路径**: `GET /v1/models`
@@ -142,15 +175,17 @@ Header: `Authorization: Bearer <token>`
 - **出参**: OpenAI models 列表 + 聚合模型条目 + 别名条目
 - **CH-033**: 聚合条目覆盖 **rule 与 static 两类**；static 聚合（含异名聚合）此前被遗漏，导致「聚合名可调用但在模型列表看不到」。聚合条目标记 `type: "aggregation"`，并用 `aggregation_kind` 区分 `rule` / `static`；`enabled=false` 的聚合不输出；与真实模型或另一聚合重名时只输出一次
 - **CH-034**: 聚合条目**按聚合自身 `groups` 过滤**（空 = 所有 Key 可见），不再按成员所属上游源分组过滤；真实模型条目仍按上游源分组过滤。聚合条目额外输出 `groups` 字段
+- **CH-054**: 真实模型条目增加 `type`（`chat` / `embedding`）；别名条目增加 `capability`（目标模型能力）；聚合条目固定 `capability: "chat"`
 
 ```json
 {
   "object": "list",
   "data": [
-    { "id": "deepseek-v4-1-flash", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "static", "member_count": 3, "groups": ["premium"] },
-    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "type": "aggregation", "aggregation_kind": "rule", "context_length": 128000, "max_output": 65536, "groups": [] },
-    { "id": "my-model", "object": "model", "owned_by": "smart-router", "type": "pointer", "target_model": "deepseek-ai/deepseek-v4-pro" },
-    { "id": "mistralai/mistral-large-...", "object": "model" }
+    { "id": "deepseek-v4-1-flash", "object": "model", "owned_by": "smart-router", "type": "aggregation", "capability": "chat", "aggregation_kind": "static", "member_count": 3, "groups": ["premium"] },
+    { "id": "smart-latest", "object": "model", "owned_by": "smart-router", "type": "aggregation", "capability": "chat", "aggregation_kind": "rule", "context_length": 128000, "max_output": 65536, "groups": [] },
+    { "id": "my-model", "object": "model", "owned_by": "smart-router", "type": "pointer", "target_model": "deepseek-ai/deepseek-v4-pro", "capability": "chat" },
+    { "id": "bge-small-zh-v1.5", "object": "model", "owned_by": "smart-router", "type": "embedding" },
+    { "id": "mistralai/mistral-large-...", "object": "model", "type": "chat" }
   ]
 }
 ```
@@ -1176,6 +1211,7 @@ Header: `Authorization: Bearer <token>`
 | 聚合名管理 | GET/PUT /admin/api/aggregated-names（兼容）；GET/PUT/DELETE /admin/api/aggregations | agg_unified（kind=rule） |
 | rule 聚合规则绑定 | PUT /admin/api/aggregations（`rule_bindings`）；GET /admin/api/aggregations（`rule_bindings` / `rule_binding_summary` / `stale_bindings`） | agg_unified(rule_bindings) |
 | 同名模型跨源聚合 | POST /v1/chat/completions（direct 多候选） | up_upstream(models) |
+| 向量嵌入（CH-054） | POST /v1/embeddings；GET /v1/models（`type`）；POST /admin/api/upstreams/{id}/test（`dimension`） | up_upstream(models[].type), log_usage(protocol=embedding) |
 | 异名模型聚合 | POST /v1/chat/completions（聚合名 → 各源真实模型名） | agg_unified（kind=static, members） |
 | 聚合配置与建议 | GET/PUT/DELETE /admin/api/model-groups（兼容）；GET/PUT/DELETE /admin/api/aggregations；GET .../suggestions；GET .../source-models | agg_unified |
 | 聚合独立分组（门面权限） | PUT /admin/api/aggregations（`groups`）；GET /admin/api/aggregations（`groups`）；GET /v1/models 按聚合分组过滤 | agg_unified(groups), sys_setting(groups) |
@@ -1213,3 +1249,4 @@ Header: `Authorization: Bearer <token>`
 | 2026-10-22 | CH-042：新增 4.24 数据导出 `GET/POST /admin/api/export/{dataset}` + `GET /admin/api/export/datasets`（10 个数据集，xlsx 由标准库手写 OOXML，零依赖） | AI |
 | 2026-10-27 | CH-050：`X-Served-By` 等响应头值统一 ASCII 安全化（非 ASCII 的 `{上游}/{模型}` 走 percent-encode），修复中文上游 ID 导致 /v1 响应 500（UnicodeEncodeError） | AI+用户 |
 | 2026-10-28 | CH-051：新增 4.28.5 测试聚合端点（成员逐个 + 走聚合一次）；`members[].weight` 明确定义为 static 聚合的请求分发权重（平滑加权轮询 + 冷却后重归一） | AI+用户 |
+| 2026-11-02 | CH-054：新增 2.3.1 `POST /v1/embeddings`（OpenAI 兼容、非流式、原样透传）；`/v1/models` 增加 `type` / `capability`；`/admin/api/upstreams/{id}/test` 对向量模型返回 `dimension` | AI+用户 |

@@ -179,6 +179,9 @@ class ProbePlanConfigMixin:
                 name = m.get("name") if isinstance(m, dict) else str(m)
                 if not name or not self.is_model_enabled(uid, name):
                     continue
+                # CH-054：向量模型不参与聊天聚合发现
+                if isinstance(m, dict) and m.get("type") == "embedding":
+                    continue
                 discovered.setdefault(name, []).append(uid)
 
         result: dict[str, list[dict]] = {}
@@ -193,6 +196,9 @@ class ProbePlanConfigMixin:
                     uid = item.get("upstream", "")
                     actual = item.get("model") or name
                     if not uid or (uid, actual) in seen:
+                        continue
+                    # CH-054：向量模型不参与聊天聚合
+                    if self.is_model_embedding(uid, actual):
                         continue
                     if not self.is_upstream_enabled(uid) or not self.is_model_enabled(uid, actual):
                         continue
@@ -225,6 +231,9 @@ class ProbePlanConfigMixin:
                 continue
             for m in u.get("models") or []:
                 if isinstance(m, dict) and m.get("name") == name:
+                    # CH-054：向量模型不构成聊天聚合组
+                    if m.get("type") == "embedding":
+                        break
                     count += 1
                     break
             if count >= 2:
@@ -308,7 +317,7 @@ class ProbePlanConfigMixin:
                     for uid in self.collect_model_upstreams(target):
                         add(uid, target, "pointer")
 
-        # 过滤：上游禁用 / 探测禁用 / 模型级禁用
+        # 过滤：上游禁用 / 探测禁用 / 模型级禁用 / 向量模型（CH-054：聊天探测不适用）
         for key in list(plan.keys()):
             item = plan[key]
             uid = item["upstream"]
@@ -316,6 +325,9 @@ class ProbePlanConfigMixin:
                 del plan[key]
                 continue
             if not self.is_model_enabled(uid, item["model"]):
+                del plan[key]
+                continue
+            if self.is_model_embedding(uid, item["model"]):
                 del plan[key]
         return plan
 

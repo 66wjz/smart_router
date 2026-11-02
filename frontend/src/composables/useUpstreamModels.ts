@@ -154,15 +154,18 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  // ---------- 协议覆盖 / 启停 ----------
+  // ---------- 协议覆盖 / 类型 / 启停 ----------
   async function setModelProtocol(u: { id: string }, modelName: string, protocol: string) {
     const effective = protocol === 'inherit' ? '' : protocol
     const list = modelsByUpstream[u.id] || []
-    const newList = list.map((e) =>
-      e.name === modelName
-        ? (effective ? { name: e.name, protocol: effective as ModelEntry['protocol'] } : { name: e.name })
-        : e,
-    )
+    const newList = list.map((e) => {
+      if (e.name !== modelName) return e
+      // 保留 type / enabled 等其余字段，只改协议
+      const next: ModelEntry = { ...e }
+      if (effective) next.protocol = effective as ModelEntry['protocol']
+      else delete next.protocol
+      return next
+    })
     try {
       await updateUpstreamModels(u.id, newList)
       modelsByUpstream[u.id] = newList
@@ -171,6 +174,24 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
         : `模型「${modelName}」已恢复继承源协议`)
     } catch (e: any) {
       ElMessage.error(e?.response?.data?.detail || '保存协议失败')
+    }
+  }
+
+  /** CH-054：切换模型能力类型（chat / embedding） */
+  async function setModelType(u: { id: string }, modelName: string, type: string) {
+    const nextType: 'chat' | 'embedding' = type === 'embedding' ? 'embedding' : 'chat'
+    const list = modelsByUpstream[u.id] || []
+    const newList = list.map((e) =>
+      e.name === modelName ? { ...e, type: nextType } : e,
+    )
+    try {
+      await updateUpstreamModels(u.id, newList)
+      modelsByUpstream[u.id] = newList
+      ElMessage.success(nextType === 'embedding'
+        ? `模型「${modelName}」已标为向量模型（仅 /v1/embeddings 可用）`
+        : `模型「${modelName}」已标为对话模型`)
+    } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail || '保存模型类型失败')
     }
   }
 
@@ -343,8 +364,13 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
       const res: any = await testUpstreamModel(u.id, { model: m })
       const latency = Date.now() - start
       if (res.ok) {
-        modelStatesByUpstream[u.id][m] = { status: 'ok', latency, detail: res.content || '（无文本回复）' }
-        ElMessageBox.alert(`模型: ${m}\n耗时: ${latency} ms\n\n回复: ${res.content}`, `模型测试成功（${u.name}）`, {
+        const content = res.content || '（无文本回复）'
+        modelStatesByUpstream[u.id][m] = { status: 'ok', latency, detail: content }
+        // CH-054：向量模型测试额外展示维度
+        const lines = [`模型: ${m}`, `耗时: ${latency} ms`]
+        if (res.dimension) lines.push(`维度: ${res.dimension}`)
+        lines.push('', content)
+        ElMessageBox.alert(lines.join('\n'), `模型测试成功（${u.name}）`, {
           confirmButtonText: '知道了',
         })
       } else {
@@ -431,7 +457,7 @@ export function useUpstreamModels(loadAll: () => Promise<void> | void) {
     // actions
     initUpstream, setModels, openFetchPanel, fetchRemoteModels, filteredRemoteModels,
     selectedRemoteCount, toggleSelectAll, handleJoin, addModels, mergeModels,
-    setModelProtocol, handleToggleModel, initModelSortable, initAllSortables,
+    setModelProtocol, setModelType, handleToggleModel, initModelSortable, initAllSortables,
     visibleModels, toggleExpand, allSelected, toggleSelectAllModels, selectedModelCount,
     selectedModels, batchDelete, isTesting, modelState, modelStateBadge, modelStateText,
     modelStateDetail, testModel, testModels, testAllModels, batchTest, removeModel,

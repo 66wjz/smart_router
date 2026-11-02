@@ -58,6 +58,54 @@ class UpstreamConfigMixin:
                 return bool(m.get("enabled", True))
         return True
 
+    # ------------------------------------------------------------
+    # CH-054：模型能力类型（chat / embedding）
+    # ------------------------------------------------------------
+
+    def get_model_type(self, upstream_id: str, model: str) -> str:
+        """模型能力类型：条目显式 type=embedding 才返回 embedding，其余（含未配置）按 chat"""
+        upstream = self.get_upstream(upstream_id)
+        if not upstream:
+            return "chat"
+        for m in upstream.get("models") or []:
+            if isinstance(m, dict) and m.get("name") == model:
+                return "embedding" if m.get("type") == "embedding" else "chat"
+        return "chat"
+
+    def is_model_embedding(self, upstream_id: str, model: str) -> bool:
+        return self.get_model_type(upstream_id, model) == "embedding"
+
+    def collect_embedding_upstreams(self, model_name: str, limit: int | None = None) -> list[str]:
+        """向量模型的可用上游源（按配置顺序）
+
+        与聊天不同：不查路由规则、不查聚合组，只认「已配置模型 + type=embedding」，
+        避免向量请求被聊天语义（优先级/权重/聚合）污染。
+        """
+        matched: list[str] = []
+        for u in self._upstreams:
+            uid = u.get("upstream_id", "")
+            if not uid or uid in matched or not self.is_upstream_enabled(uid):
+                continue
+            for m in u.get("models") or []:
+                if not isinstance(m, dict) or m.get("name") != model_name:
+                    continue
+                if m.get("type") != "embedding":
+                    continue
+                if not self.is_model_enabled(uid, model_name):
+                    continue
+                matched.append(uid)
+                if limit and len(matched) >= limit:
+                    return matched
+                break
+        return matched
+
+    def resolve_embedding_candidates(self, model_name: str) -> list[dict]:
+        """向量模型 → 候选列表 [{model, upstream}]（本期不做跨模型聚合）"""
+        return [
+            {"model": model_name, "upstream": uid}
+            for uid in self.collect_embedding_upstreams(model_name)
+        ]
+
     def auto_same_name_enabled(self) -> bool:
         """同名模型自动聚合开关（CH-019；CH-036 默认改为关闭）
 
@@ -145,6 +193,9 @@ class UpstreamConfigMixin:
                 actual = item.get("model") or model_name
                 if not uid or uid in result:
                     continue
+                # CH-054：聚合成员里的向量模型不参与聊天路由
+                if self.is_model_embedding(uid, actual):
+                    continue
                 if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, actual):
                     result.append(uid)
                     if limit and len(result) >= limit:
@@ -156,6 +207,9 @@ class UpstreamConfigMixin:
             for c in rule.get("candidates", []):
                 if c.get("model") == model_name:
                     uid = c.get("upstream", self.default_upstream)
+                    # CH-054：路由规则里的向量模型不参与聊天路由
+                    if self.is_model_embedding(uid, model_name):
+                        continue
                     if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, model_name):
                         matched.append(uid)
                         if limit and len(matched) >= limit:
@@ -168,6 +222,9 @@ class UpstreamConfigMixin:
                 continue
             for m in u.get("models") or []:
                 if isinstance(m, dict) and m.get("name") == model_name:
+                    # CH-054：已配置模型里 type=embedding 的，不允许聊天端点命中
+                    if m.get("type") == "embedding":
+                        break
                     if self.is_model_enabled(uid, model_name):
                         matched.append(uid)
                         if limit and len(matched) >= limit:
@@ -188,6 +245,9 @@ class UpstreamConfigMixin:
             for item in group.get("upstreams", []):
                 uid = item.get("upstream", "")
                 actual = item.get("model") or group_name
+                # CH-054：向量模型不参与聊天聚合
+                if self.is_model_embedding(uid, actual):
+                    continue
                 if self.is_upstream_enabled(uid) and self.is_model_enabled(uid, actual):
                     return [{"model": actual, "upstream": uid, "weight": item.get("weight", 1)}]
             return []
@@ -197,6 +257,9 @@ class UpstreamConfigMixin:
             uid = item.get("upstream", "")
             actual = item.get("model") or group_name
             if not uid or (uid, actual) in seen:
+                continue
+            # CH-054：向量模型不参与聊天聚合
+            if self.is_model_embedding(uid, actual):
                 continue
             if not self.is_upstream_enabled(uid) or not self.is_model_enabled(uid, actual):
                 continue

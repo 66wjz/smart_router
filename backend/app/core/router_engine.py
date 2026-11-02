@@ -196,6 +196,9 @@ def get_ordered_candidates(
             continue
         if not app_config.is_model_enabled(uid, c["model"]):
             continue
+        # CH-054：向量模型不参与聊天规则路由
+        if app_config.is_model_embedding(uid, c["model"]):
+            continue
         enabled_filtered.append(c)
     candidates = enabled_filtered
 

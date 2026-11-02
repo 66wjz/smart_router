@@ -28,6 +28,10 @@ class UpstreamRepository(BaseRepository):
                 protocol = item.get("protocol")
                 if protocol:
                     entry["protocol"] = str(protocol)
+                # CH-054：保留模型能力类型（chat / embedding），缺省不写（读取方按 chat 处理）
+                model_type = item.get("type")
+                if model_type == "embedding":
+                    entry["type"] = "embedding"
                 entry["enabled"] = 1 if item.get("enabled", True) else 0
                 entry["order"] = item.get("order", idx)
                 result.append(entry)

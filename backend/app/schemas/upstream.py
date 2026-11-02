@@ -5,11 +5,14 @@
 from pydantic import BaseModel, field_validator
 
 ALLOWED_MODEL_PROTOCOLS = {"openai", "anthropic", "responses"}
+ALLOWED_MODEL_TYPES = {"chat", "embedding"}
 
 
 class ModelEntry(BaseModel):
     name: str
     protocol: str | None = None
+    # CH-054：模型能力类型，决定能被哪个入站端点选中（缺省 chat，兼容存量数据）
+    type: str = "chat"
     enabled: bool = True
 
     @field_validator("protocol")
@@ -17,6 +20,13 @@ class ModelEntry(BaseModel):
     def _check_protocol(cls, v: str | None) -> str | None:
         if v is not None and v not in ALLOWED_MODEL_PROTOCOLS:
             raise ValueError(f"protocol 仅支持 {sorted(ALLOWED_MODEL_PROTOCOLS)}")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _check_type(cls, v: str) -> str:
+        if v not in ALLOWED_MODEL_TYPES:
+            raise ValueError(f"type 仅支持 {sorted(ALLOWED_MODEL_TYPES)}")
         return v
 
 

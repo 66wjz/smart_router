@@ -3,6 +3,8 @@ import request from '@/utils/request'
 export interface ModelEntry {
   name: string
   protocol?: 'openai' | 'anthropic' | 'responses'
+  // CH-054：模型能力类型，chat=对话 / embedding=向量
+  type?: 'chat' | 'embedding'
   enabled?: boolean
 }
 

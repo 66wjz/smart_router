@@ -88,6 +88,15 @@
 - 提交：用户选择合并为一个 commit（含 CH-042~048 列表统一化 + v5.2.4 部署运维 + 双栈修正）
 - 未部署（用户明确「这次先不部署了」）
 
+### 2026-11-02 - CH-054 向量模型（Embedding）接入（B 线-大）
+- 触发：用户「现在这个中转站，能否加入向量模型」→ 确认可行后「按照你建议来，严格按照 skill 管控开发流程」；提供服务器 `192.168.31.10` 与本地嵌入服务（`bge-small-zh-v1.5`，512 维，`127.0.0.1:8090`）
+- 路径判定：STATE 全阶段 done + 维护迭代 → **维护迭代模式**；分类 **B 线-大** → 迷你 stage-1→5
+- 迷你 stage-1/2：`docs/_changes/FB-049-向量模型接入.md`（心智模型、范围、不做项、API/模块/路由/验证计划）
+- 实施：新增 `api/v1/embeddings.py` + `upstream/embedding_adapter.py`；`RouterService.embeddings/_resolve_embedding_candidates`；模型 `type`（chat/embedding）持久化与候选隔离；探测计划剔除向量单元；`/v1/models` type/capability；管理端测试返回 dimension；前端模型类型下拉 + 维度弹窗；`_build_endpoint` 兼容 base_url 带 `/v1`
+- 验证：`test/verify_embedding_ch054.py` **ALL PASS**；回归 CH-050/040/039/041/024/034/051/052 全过；`compileall` 0 错误；`npm run build` 通过
+- 部署：生产 `192.168.31.10`，备份 `backup/ch054-20261102-192330`（368M）；上传 12 个后端文件 + 替换 dist；新增上游 `local-embedding`；重启后 `/v1/embeddings` 200/512 维/usage 9+9、批量 3 条、`/v1/models` type=embedding、管理端 dimension=512、用量 2 条、无 Traceback
+- 收尾：10 项文档影响核对全部受影响并已同步（需求规格 / 功能清单 / 架构设计 / 数据库设计 / API契约 / 接口文档 / 系统核心流程 / 五列矩阵 / README / 变更记录）；`_changes/README` 登记并归档；feedback-log FB-049；STATE 追加 CH-054 维护记录；版本 v5.4.0 → v5.5.0
+
 ### 2026-10-22 - v5.2.4 部署上线（先清用量日志再部署）
 - 触发：用户「先别急提交，先更新服务器的版本」；首次全量部署因生产库 11G 备份过重被用户中断，指示「把用量日志先清空了部署」
 - 定位：生产 `backend/smart_router.db` = 11GB（WAL 10MB），部署第 1 步整库在线备份要额外 11GB、耗时不可控

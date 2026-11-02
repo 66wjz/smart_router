@@ -1,6 +1,6 @@
 # 项目流程状态
 
-> **当前版本：v5.4.0**（2026-10-29；v5.2.4 = CH-042~CH-048 列表统一化 + FB-041 双栈监听修正；v5.2.5 = CH-050 中文上游 ID 响应头编码修复（已部署）；v5.3.0 = CH-051 聚合测试 + 成员加权分发（已部署）；v5.4.0 = CH-052 会话亲和（已部署 2026-10-28）+ CH-053 日志分页修复；主仓库 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库已转私有）
+> **当前版本：v5.5.0**（2026-11-02；v5.2.4 = CH-042~CH-048 列表统一化 + FB-041 双栈监听修正；v5.2.5 = CH-050 中文上游 ID 响应头编码修复；v5.3.0 = CH-051 聚合测试 + 成员加权分发；v5.4.0 = CH-052 会话亲和 + CH-053 日志分页修复；v5.5.0 = CH-054 向量模型（Embedding）接入，已部署 192.168.31.10；主仓库 GitHub：https://github.com/66wjz/smart_router，原 Gitee 仓库已转私有）
 
 - 项目名称：Smart Router（AI 模型智能路由代理）
 - 项目路径：E:\80-project_dev\04_smart-router(starting)
@@ -10,7 +10,7 @@
 - 创建时间：2026-08-07（v4 追溯补建）；2026-08-09（v5 重构重启管控）
 - 当前阶段：维护迭代（v5 六阶段已完成上线）
 - 当前阶段状态：in_progress
-- 上次更新：2026-10-29（CH-053 / FB-048：用量页日志列表分页不刷新已修复并部署；CH-052 已于 2026-10-28 部署生产并实测会话钉住与缓存命中）
+- 上次更新：2026-11-02（CH-054 / FB-049：向量模型接入已实现 + 本地验证 + 部署生产 192.168.31.10 v5.5.0，实测 512 维向量调用与管理端维度测试通过）
 
 ## 补建说明
 
@@ -71,6 +71,7 @@
 | CH-051 | 聚合测试 + 成员加权分发（B 线-大，FB-045）：①新增 `core/weighted_rr.py` 平滑加权轮询 + `router_service._apply_weighted_order`，static 聚合在分层排序后按成员 `weight` 选首位（2/1/1≈50/25/25），冷却/探针 down 成员剔除后剩余权重重归一（2/1≈67/33），全部不可用回退原顺序；rule 聚合不变；②新增 `POST /admin/api/aggregations/test?name=`：成员逐个独立测试 + 走聚合一次（真实权重路由，返回命中成员与尝试链），不写用量、不改健康；③前端聚合卡片「测试」按钮 + `AggregationTestModal`（份额/冷却/回复/尝试链）+ 成员权重 ×N 角标 + 文案调整 | ✅ 已实现 + 本地验证（2026-10-28）：`verify_aggregation_weight_ch051.py` 17 项全过（分布/重归一/兜底/测试端点/不写用量）；回归 ch040（9b 按新语义重置轮询）/ch039/ch041/ch024/ch034/ch036 全过；`py_compile` + `npm run build` 通过；**已部署生产 v5.3.0**（2026-10-28） | 生产 |
 | CH-052 | 会话亲和：缓存优先路由（B 线-大，FB-046）：①新增 `core/affinity.py`——会话指纹 `sha256(模型 + user 字段或第一条 user 消息)[:16]`（不 hash 全量、不存原文），亲和表 TTL 45 分钟 / LRU 2 万条；②`router_service._apply_affinity`：新会话按 `score =（近 5 分钟请求数 + 活跃会话数）/ weight` 放置并钉住 `(upstream, model, key)`，命中钉子排首位，目标不健康/不在候选则重钉，请求中切换成功则改钉成功那家且**不切回**；③`key_pool.pick` 支持会话偏好 Key，同源换号后钉子跟随实际 Key；④短请求（<2000 tokens）/单候选/`affinity=0`/全局关闭不钉；⑤`agg_unified.affinity`（NULL=跟随全局/0/1）+ 编辑弹窗三选 + 卡片徽标；⑥`log_usage` 新增 `affinity_key / affinity_hit / switch_reason` | ✅ 已实现 + 本地验证（2026-10-28，38 项）+ **已部署生产 v5.4.0**（2026-10-28，备份 backup/ch052-20261028-195011）；上线后实测 298 条请求：4 个多轮会话全部固定同一上游、2 次正常 failover、deepseek-v4-1-flash 钉住后缓存率 78.2%（单请求 ≈99%）；glm-5-3 经 trae 缓存 0% 系上游本身不返回缓存（历史相同） | 生产 |
 | CH-053 | 日志列表分页不刷新（A 线，FB-048）：用量页「最近请求明细」切换页码 / 每页条数后内容不变 | ✅ 已修复 + 已部署（2026-10-29）：根因是 `ListPage` 转发事件名为 `page-change`，`Usage.vue` 写成 `@change`，监听永不触发；一处改为 `@page-change="loadLogs"`；构建产物 `onPageChange` 0→1、线上 dist 已替换、接口分页自证 page1/page2 不同且 size 生效 | 生产 |
+| CH-054 | 向量模型（Embedding）接入（B 线-大，FB-049）：新增 `POST /v1/embeddings` + `embedding_adapter` + 模型 `type`（chat/embedding）隔离 + 探测排除 + `protocol=embedding` 用量 + 后台类型下拉/维度测试；生产新增上游 `local-embedding`（bge-small-zh-v1.5，512 维） | ✅ 已实现 + 本地验证 ALL PASS + **已部署生产 v5.5.0**（2026-11-02）：单条 200/512 维/usage 9+9、批量 3 条、`/v1/models` type=embedding、管理端 dimension=512、用量 2 条、聊天模型调向量 400、无 Traceback | 生产 |
 
 ## 历史经验参考
 

@@ -51,6 +51,17 @@
         <code class="model-name">{{ m.name }}</code>
         <el-tag v-if="m.enabled === false" type="info" size="small">已禁用</el-tag>
         <el-select
+          :model-value="m.type || 'chat'"
+          size="small"
+          style="width: 104px"
+          :disabled="models.testingAll[u.id]"
+          @change="(val: string) => models.setModelType(u, m.name, val)"
+        >
+          <el-option label="对话" value="chat" />
+          <el-option label="向量" value="embedding" />
+        </el-select>
+        <el-select
+          v-if="(m.type || 'chat') !== 'embedding'"
           :model-value="m.protocol || 'inherit'"
           size="small"
           style="width: 160px"

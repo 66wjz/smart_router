@@ -1,8 +1,8 @@
-# Smart Router v5.4 - AI 模型智能路由代理 · 中转站
+# Smart Router v5.5 - AI 模型智能路由代理 · 中转站
 
-**当前版本：v5.4.0**（2026-10-28）· 仓库：https://github.com/66wjz/smart_router
+**当前版本：v5.5.0**（2026-11-02）· 仓库：https://github.com/66wjz/smart_router
 
-基于 FastAPI + Vue3 + SQLite 的轻量级 AI 模型网关：既是**智能路由器**（按请求内容自动选模型），也是**中转站**（统一 Key/分组/协议，直连透传已配置模型）。提供 3×3 协议矩阵、延迟探测、故障转移、Key 池、多分组权限、智能重试等企业级能力。
+基于 FastAPI + Vue3 + SQLite 的轻量级 AI 模型网关：既是**智能路由器**（按请求内容自动选模型），也是**中转站**（统一 Key/分组/协议，直连透传已配置模型）。提供 3×3 协议矩阵、向量（Embedding）接口、延迟探测、故障转移、Key 池、多分组权限、智能重试等企业级能力。
 
 ## 架构概览
 
@@ -66,6 +66,7 @@
 | **聚合权重分发（CH-051）** | 固定成员聚合按 `members[].weight` 做平滑加权轮询：2/1/1 ≈ 50%/25%/25%，周期内严格按比例且均匀穿插；成员冷却/探测不可用时自动剔除、剩余权重重归一（2/1 ≈ 67%/33），全部不可用回退原顺序。权重全 1 即平均轮询 |
 | **聚合测试（CH-051）** | 聚合卡片「测试」：逐个成员独立测（通过/失败/跳过 + 耗时 + 回复 + 权重占比 + 是否冷却），再按真实权重路由走一次（显示实际命中成员与尝试链）。测试不写用量、不改健康状态 |
 | **会话亲和（CH-052）** | 同一会话固定走同一上游与同一 Key，直接命中上游 prompt cache：同一模型 + 相同首条消息视为同一会话，新会话按「负载/权重」放置后钉住，只有该源失败才换、换后不切回。短请求（<2000 tokens 估算）不钉；可在聚合编辑里单独关（跟随全局/开启/关闭），默认开。跨提供商缓存仍无法共享（物理上限） |
+| **向量模型（CH-054）** | 新增 OpenAI 兼容 `POST /v1/embeddings`（非流式、原样透传）。已配置模型可标为「对话 / 向量」，聊天与向量候选严格隔离；复用 Key 池、分组权限、失败重试；用量记 `protocol=embedding`（只计输入 token）；向量模型不参与聊天延迟探测；`/v1/models` 带 `type`，后台模型测试显示维度。本期不做向量聚合/跨模型兜底 |
 | **三层用量统计** | 全局 / 模型级 / 客户端 Key 级用量与成功率，含逐条请求明细；流式自动注入 `include_usage` 取真实 tokens，上游不支持时按字符估算并标注 |
 | **按单元用量（号池核算）** | 额外按「上游源 × 上游真实模型名」统计，聚合请求记账到实际命中的真实模型，可直接看出各家额度消耗 |
 | **管理后台** | Vue3 SPA（同端口 10002）：仪表盘/上游源/规则/别名/Key/聚合模型（三标签）/用量统计/系统设置（全局容错 + 分组），JWT 鉴权，热重载 |
@@ -195,6 +196,12 @@ curl http://your-server:10002/v1/responses \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"smart-latest","input":"你好"}'
+
+# 向量（Embedding）格式（CH-054）
+curl http://your-server:10002/v1/embeddings \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bge-small-zh-v1.5","input":"峨山县政务服务中心"}'
 ```
 
 ```python
@@ -206,6 +213,10 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "你好"}],
 )
 print(resp.choices[0].message.content)
+
+# 向量（CH-054）
+emb = client.embeddings.create(model="bge-small-zh-v1.5", input="峨山县政务服务中心")
+print(len(emb.data[0].embedding))
 ```
 
 模型名三种用法：
@@ -218,10 +229,10 @@ print(resp.choices[0].message.content)
 
 ## 协议矩阵
 
-| 方向 | OpenAI chat | Anthropic | Responses |
-|------|------------|-----------|-----------|
-| 入站（客户端 → 本服务） | ✅ `/v1/chat/completions` | ✅ `/v1/messages`（x-api-key 兼容） | ✅ `/v1/responses`（Codex 可用） |
-| 出站（本服务 → 上游） | ✅ | ✅（模型级覆盖） | ✅（模型级覆盖） |
+| 方向 | OpenAI chat | Anthropic | Responses | Embeddings |
+|------|------------|-----------|-----------|-----------|
+| 入站（客户端 → 本服务） | ✅ `/v1/chat/completions` | ✅ `/v1/messages`（x-api-key 兼容） | ✅ `/v1/responses`（Codex 可用） | ✅ `/v1/embeddings`（CH-054） |
+| 出站（本服务 → 上游） | ✅ | ✅（模型级覆盖） | ✅（模型级覆盖） | ✅ OpenAI 兼容上游 |
 
 内部统一以 OpenAI chat 格式为中间语言：入站归一化 → 路由 → 出站按模型协议转换。任意协议客户端可调用任意协议上游的模型。
 

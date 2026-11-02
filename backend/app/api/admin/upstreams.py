@@ -19,6 +19,7 @@ from app.schemas.upstream import (
 )
 from app.services.config_service import ConfigService
 from app.upstream import test_non_stream, test_non_stream_anthropic, test_non_stream_responses
+from app.upstream.embedding_adapter import embedding_timeout, test_non_stream_embedding
 from app.upstream.openai_adapter import _build_endpoint
 
 router = APIRouter(prefix="/admin/api", tags=["admin-upstreams"])
@@ -159,6 +160,19 @@ async def test_upstream(upstream_id: str, req: UpstreamTestRequest, request: Req
         raise HTTPException(404, "上游源不存在")
     if not cfg.is_upstream_enabled(upstream_id):
         raise HTTPException(400, f"上游源 {upstream_id} 已禁用，无法测试")
+
+    # CH-054：向量模型走嵌入测试，返回维度
+    if cfg.get_model_type(upstream_id, req.model) == "embedding":
+        summary, error, dimension = await test_non_stream_embedding(
+            req.model, upstream_id, req.prompt,
+            embedding_timeout(cfg), http_client, cfg, request.app.state.health,
+        )
+        if error:
+            return JSONResponse(
+                status_code=502,
+                content={"ok": False, "error": f"模型 {req.model} 测试失败：{error}"},
+            )
+        return {"ok": True, "content": summary, "dimension": dimension}
 
     body = {
         "model": req.model,
